@@ -1,13 +1,16 @@
 """Отправка писем продавцам через Gmail SMTP.
 Формат почт: mail:apppassword (только Gmail).
 App Password: https://myaccount.google.com/apppasswords
+Поддержка SOCKS5 прокси (proxies.json) для обхода блокировки SMTP на VDS.
 """
+import json
 import logging
 import os
 import re
 import smtplib
 from email.mime.text import MIMEText
 from email.utils import formataddr
+from pathlib import Path
 
 from .config import DB_PATH, ENVIRONMENT, TEST_MAIL
 from .database import (
@@ -26,6 +29,59 @@ logger = logging.getLogger(__name__)
 
 # В dev режиме всегда шлём на тестовую почту
 DEV_TEST_RECIPIENT = "eclipselucky@gmail.com"
+
+
+def _load_smtp_proxy() -> tuple[str, int, str, str] | None:
+    """Первый прокси из proxies.json для SMTP. (host, port, user, pass) или None."""
+    for base in (Path.cwd(), Path(__file__).resolve().parent.parent):
+        path = base / "proxies.json"
+        if path.is_file():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8").strip())
+                if isinstance(data, list) and data:
+                    s = str(data[0]).strip()
+                    parts = s.split(":", 3)
+                    if len(parts) >= 2:
+                        host, port = parts[0], int(parts[1])
+                        user, pass_ = (parts[2], parts[3]) if len(parts) == 4 else ("", "")
+                        return (host, port, user, pass_)
+            except (json.JSONDecodeError, OSError, ValueError):
+                pass
+            break
+    return None
+
+
+def _create_smtp_connection(host: str = "smtp.gmail.com", port: int = 587):
+    """Создать SMTP соединение, через SOCKS5 если есть proxies.json."""
+    proxy = _load_smtp_proxy()
+    if proxy:
+        try:
+            import socks
+
+            class SocksSMTP(smtplib.SMTP):
+                def _get_socket(self, host, port, timeout=None, source_address=None):
+                    sock = socks.socksocket()
+                    sock.set_proxy(
+                        socks.SOCKS5,
+                        proxy[0],
+                        proxy[1],
+                        username=proxy[2] or None,
+                        password=proxy[3] or None,
+                    )
+                    try:
+                        tout = float(timeout) if timeout is not None else 30.0
+                        sock.settimeout(tout)
+                    except (TypeError, ValueError):
+                        sock.settimeout(30.0)
+                    sock.connect((host, port))
+                    return sock
+
+            smtp = SocksSMTP(host, port)
+            logger.debug("SMTP через SOCKS5 прокси %s:%s", proxy[0], proxy[1])
+            return smtp
+        except ImportError:
+            logger.warning("PySocks не установлен. pip install PySocks для SMTP через прокси.")
+    return smtplib.SMTP(host, port)
 
 
 def _sanitize_seller_email_local(seller_name: str) -> str:
@@ -130,10 +186,13 @@ def send_seller_email(
     msg["To"] = recipient
 
     try:
-        with smtplib.SMTP("smtp.gmail.com", 587) as smtp:
+        smtp = _create_smtp_connection()
+        try:
             smtp.starttls()
             smtp.login(sender_email, sender_password)
             smtp.sendmail(sender_email, [recipient], msg.as_string())
+        finally:
+            smtp.quit()
         set_last_used_email(db_path, sender_email, user_id)
         set_last_email_for_listing(db_path, user_id, sender_email)
         logger.info("Email: отправлено на %s (с %s)", recipient, sender_email)
@@ -175,10 +234,13 @@ def send_test_email(
     msg["From"] = formataddr((user_name, sender_email))
     msg["To"] = to_addr
     try:
-        with smtplib.SMTP("smtp.gmail.com", 587) as smtp:
+        smtp = _create_smtp_connection()
+        try:
             smtp.starttls()
             smtp.login(sender_email, sender_password)
             smtp.sendmail(sender_email, [to_addr], msg.as_string())
+        finally:
+            smtp.quit()
         set_last_used_email(db_path, sender_email, user_id)
         unblock_email(db_path, sender_email, user_id)  # при успехе снять блок если был
         return True

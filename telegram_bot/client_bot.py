@@ -409,7 +409,11 @@ async def msg_worker_bulk_csv(msg: Message, state: FSMContext) -> None:
             )
             await state.clear()
             return
-        ok, fail, recipients = send_bulk_listing_emails(DB_PATH, user_id, listings)
+        await status_msg.edit_text(f"⏳ Отправляю письма ({len(listings)} шт.)... Не закрывайте бота.")
+        loop = asyncio.get_event_loop()
+        ok, fail, recipients = await loop.run_in_executor(
+            None, lambda: send_bulk_listing_emails(DB_PATH, user_id, listings)
+        )
         await state.clear()
         text = (
             f"✅ <b>Рассылка завершена</b>\n\n"
