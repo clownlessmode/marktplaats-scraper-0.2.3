@@ -57,6 +57,14 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 
+def _admin_user_id() -> int:
+    """user_id администратора (для его почт и шаблонов)."""
+    try:
+        return int(ADMIN_CHAT_ID)
+    except (ValueError, TypeError):
+        return 0
+
+
 class EmailsState(StatesGroup):
     add_text = State()
 
@@ -282,7 +290,7 @@ async def cb_unblock_worker(cb: CallbackQuery) -> None:
 
 # --- Почты ---
 def _emails_menu_kb(page: int = 0) -> InlineKeyboardMarkup:
-    count = get_emails_count(DB_PATH)
+    count = get_emails_count(DB_PATH, _admin_user_id())
     btns = [
         [InlineKeyboardButton(text="➕ Добавить (mail:apppassword)", callback_data="emails_add")],
         [InlineKeyboardButton(text="📤 Загрузить CSV", callback_data="emails_upload")],
@@ -303,7 +311,7 @@ async def cb_admin_emails(cb: CallbackQuery, state: FSMContext) -> None:
         await cb.answer()
         return
     await state.clear()
-    count = get_emails_count(DB_PATH)
+    count = get_emails_count(DB_PATH, _admin_user_id())
     await cb.message.edit_text(
         f"📧 <b>База почт</b>\n\nВсего: {count}\n\n"
         "• Добавить — введите mail:apppassword (только Gmail, через Enter — несколько)\n"
@@ -346,7 +354,7 @@ async def msg_emails_add_text(msg: Message, state: FSMContext) -> None:
     if not pairs:
         await msg.answer("❌ Не найдено валидных строк. Формат: mail@gmail.com:apppassword")
         return
-    added, skipped = add_emails_batch(DB_PATH, pairs)
+    added, skipped = add_emails_batch(DB_PATH, pairs, _admin_user_id())
     await state.clear()
     await msg.answer(f"✅ Добавлено: {added}, пропущено (дубли): {skipped}")
     await msg.answer("📧 База почт", reply_markup=_emails_menu_kb())
@@ -370,7 +378,7 @@ async def msg_emails_csv(msg: Message, state: FSMContext) -> None:
         if not pairs:
             await msg.answer("❌ В CSV не найдено email. Колонки: email, apppassword (только Gmail)")
             return
-        added, skipped = add_emails_batch(DB_PATH, pairs)
+        added, skipped = add_emails_batch(DB_PATH, pairs, _admin_user_id())
         await msg.answer(f"✅ Из CSV добавлено: {added}, пропущено (дубли): {skipped}")
     except Exception as e:
         await msg.answer(f"❌ Ошибка: {e}")
@@ -391,11 +399,12 @@ async def cb_emails_list(cb: CallbackQuery) -> None:
 
 
 def _render_emails_list(page: int) -> tuple[str, InlineKeyboardMarkup]:
+    admin_uid = _admin_user_id()
     per_page = 15
     offset = page * per_page
-    rows = get_emails(DB_PATH, limit=per_page, offset=offset)
-    total = get_emails_count(DB_PATH)
-    last_used = get_last_used_email(DB_PATH)
+    rows = get_emails(DB_PATH, admin_uid, limit=per_page, offset=offset)
+    total = get_emails_count(DB_PATH, admin_uid)
+    last_used = get_last_used_email(DB_PATH, admin_uid)
     if not rows:
         return "📋 <b>Список почт</b>\n\nПусто.", InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="◀️ К меню почт", callback_data="admin_emails")],
@@ -439,7 +448,7 @@ async def cb_emails_unblock(cb: CallbackQuery) -> None:
     page = int(parts[0]) if parts and parts[0].isdigit() else 0
     safe = parts[1] if len(parts) > 1 else ""
     email = safe.replace("_c_", ":").replace("_a_", "@").replace("__", "_")
-    if unblock_email(DB_PATH, email):
+    if unblock_email(DB_PATH, email, _admin_user_id()):
         await cb.answer("↩️ Почта разблокирована", show_alert=True)
     else:
         await cb.answer("Не найдено", show_alert=True)
@@ -456,11 +465,11 @@ async def cb_emails_delete(cb: CallbackQuery) -> None:
     page = int(parts[0]) if parts and parts[0].isdigit() else 0
     safe = parts[1] if len(parts) > 1 else ""
     email = safe.replace("_c_", ":").replace("_a_", "@").replace("__", "_")
-    if delete_email(DB_PATH, email):
+    if delete_email(DB_PATH, email, _admin_user_id()):
         await cb.answer("🗑 Удалено", show_alert=True)
     else:
         await cb.answer("Не найдено", show_alert=True)
-    if page > 0 and get_emails_count(DB_PATH) <= page * 15:
+    if page > 0 and get_emails_count(DB_PATH, _admin_user_id()) <= page * 15:
         page = max(0, page - 1)
     text, kb = _render_emails_list(page)
     await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
@@ -491,13 +500,13 @@ async def cb_emails_test(cb: CallbackQuery) -> None:
         return
     from .database import get_random_email
     from .config import TEST_MAIL
-    creds = get_random_email(DB_PATH)
+    creds = get_random_email(DB_PATH, _admin_user_id())
     if not creds:
         await cb.answer("Нет доступных почт", show_alert=True)
         return
     await cb.answer("Отправляю тест...")
     email, password = creds
-    ok = send_test_email(DB_PATH, email, password)
+    ok = send_test_email(DB_PATH, email, password, user_id=_admin_user_id())
     if ok:
         await cb.bot.send_message(
             cb.message.chat.id,
@@ -518,11 +527,11 @@ async def cb_emails_test_all(cb: CallbackQuery) -> None:
         await cb.answer()
         return
     from .config import TEST_MAIL
-    if get_emails_count(DB_PATH) == 0:
+    if get_emails_count(DB_PATH, _admin_user_id()) == 0:
         await cb.answer("Нет почт для теста", show_alert=True)
         return
     await cb.answer("Тестирую все почты...")
-    ok_count, failed_count, failed_emails = test_all_emails(DB_PATH)
+    ok_count, failed_count, failed_emails = test_all_emails(DB_PATH, _admin_user_id())
     lines = [
         f"🔄 <b>Тест всех почт</b> (на {TEST_MAIL})",
         "",
@@ -548,7 +557,7 @@ async def cb_emails_export(cb: CallbackQuery) -> None:
     if str(cb.message.chat.id) != str(ADMIN_CHAT_ID):
         await cb.answer()
         return
-    rows = get_emails(DB_PATH, limit=10000)
+    rows = get_emails(DB_PATH, _admin_user_id(), limit=10000)
     if not rows:
         await cb.answer("Нет почт для экспорта", show_alert=True)
         return
@@ -581,8 +590,9 @@ def _template_example() -> str:
 
 
 def _render_templates() -> tuple[str, InlineKeyboardMarkup]:
-    templates = get_templates(DB_PATH)
-    active_id = get_active_template_id(DB_PATH)
+    admin_uid = _admin_user_id()
+    templates = get_templates(DB_PATH, admin_uid)
+    active_id = get_active_template_id(DB_PATH, admin_uid)
     if not templates:
         text = "📝 <b>Шаблоны сообщений</b>\n\nНет шаблонов."
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -668,16 +678,17 @@ async def msg_tpl_body(msg: Message, state: FSMContext) -> None:
     if str(msg.chat.id) != str(ADMIN_CHAT_ID):
         return
     body = msg.text or ""
+    admin_uid = _admin_user_id()
     data = await state.get_data()
     edit_id = data.get("tpl_edit_id")
     if edit_id:
-        tpl = get_template(DB_PATH, edit_id)
+        tpl = get_template(DB_PATH, edit_id, admin_uid)
         name = tpl[0] if tpl else "Шаблон"
-        update_template(DB_PATH, edit_id, name, body)
+        update_template(DB_PATH, edit_id, name, body, admin_uid)
         await msg.answer(f"✅ Шаблон «{name}» обновлён")
     else:
         name = data.get("tpl_name", "Без названия")
-        add_template(DB_PATH, name, body)
+        add_template(DB_PATH, name, body, admin_uid)
         await msg.answer(f"✅ Шаблон «{name}» добавлен")
     await state.clear()
     text, kb = _render_templates()
@@ -694,11 +705,12 @@ async def cb_tpl_activate(cb: CallbackQuery) -> None:
     except ValueError:
         await cb.answer()
         return
-    tpl = get_template(DB_PATH, tid)
+    admin_uid = _admin_user_id()
+    tpl = get_template(DB_PATH, tid, admin_uid)
     if not tpl:
         await cb.answer("Шаблон не найден", show_alert=True)
         return
-    set_active_template_id(DB_PATH, tid)
+    set_active_template_id(DB_PATH, tid, admin_uid)
     text, kb = _render_templates()
     await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     await cb.answer("✅ Шаблон активирован", show_alert=True)
@@ -714,7 +726,8 @@ async def cb_tpl_edit(cb: CallbackQuery, state: FSMContext) -> None:
     except ValueError:
         await cb.answer()
         return
-    tpl = get_template(DB_PATH, tid)
+    admin_uid = _admin_user_id()
+    tpl = get_template(DB_PATH, tid, admin_uid)
     if not tpl:
         await cb.answer("Не найден", show_alert=True)
         return
@@ -742,9 +755,10 @@ async def cb_tpl_delete(cb: CallbackQuery) -> None:
     except ValueError:
         await cb.answer()
         return
-    if delete_template(DB_PATH, tid):
-        if get_active_template_id(DB_PATH) == tid:
-            set_active_template_id(DB_PATH, None)
+    admin_uid = _admin_user_id()
+    if delete_template(DB_PATH, tid, admin_uid):
+        if get_active_template_id(DB_PATH, admin_uid) == tid:
+            set_active_template_id(DB_PATH, None, admin_uid)
         text, kb = _render_templates()
         await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
         await cb.answer("🗑 Шаблон удалён", show_alert=True)

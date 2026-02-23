@@ -172,6 +172,39 @@ def init_db(db_path: str) -> None:
         conn.execute("ALTER TABLE emails ADD COLUMN blocked INTEGER DEFAULT 0")
     except sqlite3.OperationalError:
         pass
+    # Миграция: user_id в emails (почты привязаны к воркеру)
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(emails)").fetchall()]
+        if "user_id" not in cols:
+            first_user = conn.execute("SELECT user_id FROM users WHERE authorized = 1 LIMIT 1").fetchone()
+            default_uid = first_user[0] if first_user else 0
+            conn.execute("""
+                CREATE TABLE emails_new (
+                    user_id INTEGER NOT NULL,
+                    email TEXT NOT NULL,
+                    password TEXT,
+                    created_at TEXT,
+                    blocked INTEGER DEFAULT 0,
+                    PRIMARY KEY (user_id, email)
+                )
+            """)
+            conn.execute(
+                "INSERT INTO emails_new (user_id, email, password, created_at, blocked) "
+                "SELECT ?, email, password, created_at, COALESCE(blocked, 0) FROM emails",
+                (default_uid,),
+            )
+            conn.execute("DROP TABLE emails")
+            conn.execute("ALTER TABLE emails_new RENAME TO emails")
+    except sqlite3.OperationalError:
+        pass
+    # Миграция: user_id в email_templates (шаблоны привязаны к воркеру)
+    try:
+        conn.execute("ALTER TABLE email_templates ADD COLUMN user_id INTEGER")
+        first_user = conn.execute("SELECT user_id FROM users WHERE authorized = 1 LIMIT 1").fetchone()
+        default_uid = first_user[0] if first_user else 0
+        conn.execute("UPDATE email_templates SET user_id = ? WHERE user_id IS NULL", (default_uid,))
+    except sqlite3.OperationalError:
+        pass
     # Миграция: недостающие колонки в listings (seller_name и др.)
     for col, ctype in [
         ("seller_name", "TEXT"),
@@ -540,17 +573,17 @@ def get_blocked_users(db_path: str) -> list[tuple[int, str]]:
     return [(r[0], r[1] or "") for r in rows]
 
 
-# --- Почты (email:password) ---
-def add_email(db_path: str, email: str, password: str = "") -> bool:
-    """Добавить почту. Возвращает True если добавлена, False если уже есть."""
+# --- Почты (email:password), привязаны к user_id (воркеру) ---
+def add_email(db_path: str, email: str, password: str = "", user_id: int = 0) -> bool:
+    """Добавить почту воркеру. Возвращает True если добавлена, False если уже есть."""
     email = (email or "").strip().lower()
     if not email or "@" not in email:
         return False
     conn = get_conn(db_path)
     try:
         conn.execute(
-            "INSERT INTO emails (email, password, created_at) VALUES (?, ?, ?)",
-            (email, (password or "").strip(), datetime.utcnow().isoformat()),
+            "INSERT INTO emails (user_id, email, password, created_at) VALUES (?, ?, ?, ?)",
+            (user_id, email, (password or "").strip(), datetime.utcnow().isoformat()),
         )
         conn.commit()
         return True
@@ -561,8 +594,8 @@ def add_email(db_path: str, email: str, password: str = "") -> bool:
         conn.close()
 
 
-def add_emails_batch(db_path: str, pairs: list[tuple[str, str]]) -> tuple[int, int]:
-    """Добавить пачку (email, password). Возвращает (добавлено, пропущено дубликатов)."""
+def add_emails_batch(db_path: str, pairs: list[tuple[str, str]], user_id: int = 0) -> tuple[int, int]:
+    """Добавить пачку (email, password) воркеру. Возвращает (добавлено, пропущено дубликатов)."""
     added, skipped = 0, 0
     conn = get_conn(db_path)
     for email, password in pairs:
@@ -571,8 +604,8 @@ def add_emails_batch(db_path: str, pairs: list[tuple[str, str]]) -> tuple[int, i
             continue
         try:
             conn.execute(
-                "INSERT INTO emails (email, password, created_at) VALUES (?, ?, ?)",
-                (email, (password or "").strip(), datetime.utcnow().isoformat()),
+                "INSERT INTO emails (user_id, email, password, created_at) VALUES (?, ?, ?, ?)",
+                (user_id, email, (password or "").strip(), datetime.utcnow().isoformat()),
             )
             added += 1
         except sqlite3.IntegrityError:
@@ -582,58 +615,66 @@ def add_emails_batch(db_path: str, pairs: list[tuple[str, str]]) -> tuple[int, i
     return added, skipped
 
 
-def get_emails(db_path: str, limit: int = 100, offset: int = 0) -> list[tuple[str, str, str, int]]:
-    """(email, password, created_at, blocked) список почт."""
+def get_emails(db_path: str, user_id: int, limit: int = 100, offset: int = 0) -> list[tuple[str, str, str, int]]:
+    """(email, password, created_at, blocked) список почт воркера."""
     conn = get_conn(db_path)
     rows = conn.execute(
-        "SELECT email, password, created_at, COALESCE(blocked, 0) FROM emails ORDER BY created_at DESC LIMIT ? OFFSET ?",
-        (limit, offset),
+        "SELECT email, password, created_at, COALESCE(blocked, 0) FROM emails WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        (user_id, limit, offset),
     ).fetchall()
     conn.close()
     return [(r[0], r[1] or "", r[2] or "", r[3] or 0) for r in rows]
 
 
-def get_emails_count(db_path: str, include_blocked: bool = True) -> int:
+def get_emails_count(db_path: str, user_id: int, include_blocked: bool = True) -> int:
     conn = get_conn(db_path)
     if include_blocked:
-        row = conn.execute("SELECT COUNT(*) FROM emails").fetchone()
+        row = conn.execute("SELECT COUNT(*) FROM emails WHERE user_id = ?", (user_id,)).fetchone()
     else:
-        row = conn.execute("SELECT COUNT(*) FROM emails WHERE COALESCE(blocked, 0) = 0").fetchone()
+        row = conn.execute("SELECT COUNT(*) FROM emails WHERE user_id = ? AND COALESCE(blocked, 0) = 0", (user_id,)).fetchone()
     conn.close()
     return row[0] if row else 0
 
 
-def get_random_email(db_path: str) -> tuple[str, str] | None:
-    """Вернуть случайную не заблокированную почту (email, password) или None."""
+def get_random_email(db_path: str, user_id: int | None = None) -> tuple[str, str] | None:
+    """Вернуть случайную не заблокированную почту (email, password) или None. user_id=None — все."""
     conn = get_conn(db_path)
-    row = conn.execute(
-        "SELECT email, password FROM emails WHERE COALESCE(blocked, 0) = 0 ORDER BY RANDOM() LIMIT 1"
-    ).fetchone()
+    if user_id is not None:
+        row = conn.execute(
+            "SELECT email, password FROM emails WHERE user_id = ? AND COALESCE(blocked, 0) = 0 ORDER BY RANDOM() LIMIT 1",
+            (user_id,),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT email, password FROM emails WHERE COALESCE(blocked, 0) = 0 ORDER BY RANDOM() LIMIT 1"
+        ).fetchone()
     conn.close()
     return (row[0], row[1] or "") if row else None
 
 
-def get_active_emails(db_path: str) -> list[tuple[str, str]]:
-    """Список активных (не заблокированных) почт: [(email, password), ...], по порядку email."""
+def get_active_emails(db_path: str, user_id: int) -> list[tuple[str, str]]:
+    """Список активных (не заблокированных) почт воркера: [(email, password), ...], по порядку email."""
     conn = get_conn(db_path)
     rows = conn.execute(
-        "SELECT email, password FROM emails WHERE COALESCE(blocked, 0) = 0 ORDER BY email"
+        "SELECT email, password FROM emails WHERE user_id = ? AND COALESCE(blocked, 0) = 0 ORDER BY email",
+        (user_id,),
     ).fetchall()
     conn.close()
     return [(r[0], r[1] or "") for r in rows]
 
 
-def get_next_email_for_listing(db_path: str) -> tuple[str, str] | None:
+def get_next_email_for_listing(db_path: str, user_id: int) -> tuple[str, str] | None:
     """
-    Round-robin по активным почтам: 1-е объявление — почта 1, 2-е — почта 2, 3-е — почта 3,
-    если почт меньше — цикл: 1, 2, 1, 2, 1... Только не заблокированные.
+    Round-robin по активным почтам воркера: 1-е объявление — почта 1, 2-е — почта 2, 3-е — почта 3,
+    если почт меньше — цикл. Только не заблокированные.
     """
-    emails = get_active_emails(db_path)
+    emails = get_active_emails(db_path, user_id)
     if not emails:
         return None
     conn = get_conn(db_path)
     row = conn.execute(
-        "SELECT value FROM rotation_state WHERE key = 'last_email_for_listing'"
+        "SELECT value FROM rotation_state WHERE key = ?",
+        (f"last_email_for_listing_{user_id}",),
     ).fetchone()
     conn.close()
     last_email = (row[0] or "").strip().lower() if row and row[0] else None
@@ -645,80 +686,87 @@ def get_next_email_for_listing(db_path: str) -> tuple[str, str] | None:
     return emails[next_idx]
 
 
-def set_last_email_for_listing(db_path: str, email: str) -> None:
+def set_last_email_for_listing(db_path: str, user_id: int, email: str) -> None:
     """Записать последнюю почту, использованную для объявления (для round-robin)."""
     conn = get_conn(db_path)
     conn.execute(
-        "INSERT OR REPLACE INTO rotation_state (key, value) VALUES ('last_email_for_listing', ?)",
-        (email.strip().lower(),),
+        "INSERT OR REPLACE INTO rotation_state (key, value) VALUES (?, ?)",
+        (f"last_email_for_listing_{user_id}", email.strip().lower()),
     )
     conn.commit()
     conn.close()
 
 
-def mark_email_blocked(db_path: str, email: str) -> bool:
+def mark_email_blocked(db_path: str, email: str, user_id: int) -> bool:
     """Пометить почту как заблокированную. Возвращает True."""
     email = (email or "").strip().lower()
     if not email:
         return False
     conn = get_conn(db_path)
-    conn.execute("UPDATE emails SET blocked = 1 WHERE email = ?", (email,))
+    conn.execute("UPDATE emails SET blocked = 1 WHERE email = ? AND user_id = ?", (email, user_id))
     conn.commit()
     conn.close()
     return True
 
 
-def unblock_email(db_path: str, email: str) -> bool:
+def unblock_email(db_path: str, email: str, user_id: int) -> bool:
     """Снять блок с почты."""
     email = (email or "").strip().lower()
     if not email:
         return False
     conn = get_conn(db_path)
-    cur = conn.execute("UPDATE emails SET blocked = 0 WHERE email = ?", (email,))
+    cur = conn.execute("UPDATE emails SET blocked = 0 WHERE email = ? AND user_id = ?", (email, user_id))
     conn.commit()
     conn.close()
     return cur.rowcount > 0
 
 
-def get_last_used_email(db_path: str) -> str | None:
-    """Почта, которая последней успешно отправила письмо."""
+def get_last_used_email(db_path: str, user_id: int | None = None) -> str | None:
+    """Почта, которая последней успешно отправила письмо. user_id=None — глобальная."""
     conn = get_conn(db_path)
-    row = conn.execute(
-        "SELECT value FROM rotation_state WHERE key = 'last_used_email'"
-    ).fetchone()
+    key = f"last_used_email_{user_id}" if user_id is not None else "last_used_email"
+    row = conn.execute("SELECT value FROM rotation_state WHERE key = ?", (key,)).fetchone()
     conn.close()
     return row[0] if row and row[0] else None
 
 
-def set_last_used_email(db_path: str, email: str | None) -> None:
+def set_last_used_email(db_path: str, email: str | None, user_id: int | None = None) -> None:
     """Записать последнюю использованную почту."""
     conn = get_conn(db_path)
+    key = f"last_used_email_{user_id}" if user_id is not None else "last_used_email"
     if email is None:
-        conn.execute("DELETE FROM rotation_state WHERE key = 'last_used_email'")
+        conn.execute("DELETE FROM rotation_state WHERE key = ?", (key,))
     else:
         conn.execute(
-            "INSERT OR REPLACE INTO rotation_state (key, value) VALUES ('last_used_email', ?)",
-            (email.strip().lower(),),
+            "INSERT OR REPLACE INTO rotation_state (key, value) VALUES (?, ?)",
+            (key, email.strip().lower()),
         )
     conn.commit()
     conn.close()
 
 
-def get_all_emails(db_path: str) -> list[tuple[str, str, int]]:
-    """Все почты: (email, password, blocked)."""
+def get_all_emails(db_path: str, user_id: int | None = None) -> list[tuple[str, str, int]] | list[tuple[int, str, str, int]]:
+    """Все почты: (email, password, blocked) при user_id; (user_id, email, password, blocked) при user_id=None."""
     conn = get_conn(db_path)
+    if user_id is not None:
+        rows = conn.execute(
+            "SELECT email, password, COALESCE(blocked, 0) FROM emails WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,),
+        ).fetchall()
+        conn.close()
+        return [(r[0], r[1] or "", r[2] or 0) for r in rows]
     rows = conn.execute(
-        "SELECT email, password, COALESCE(blocked, 0) FROM emails ORDER BY created_at DESC"
+        "SELECT user_id, email, password, COALESCE(blocked, 0) FROM emails ORDER BY created_at DESC"
     ).fetchall()
     conn.close()
-    return [(r[0], r[1] or "", r[2] or 0) for r in rows]
+    return [(r[0], r[1], r[2] or "", r[3] or 0) for r in rows]
 
 
-def delete_email(db_path: str, email: str) -> bool:
-    """Удалить почту. Возвращает True если удалена."""
+def delete_email(db_path: str, email: str, user_id: int) -> bool:
+    """Удалить почту воркера. Возвращает True если удалена."""
     email = (email or "").strip().lower()
     conn = get_conn(db_path)
-    cur = conn.execute("DELETE FROM emails WHERE email = ?", (email,))
+    cur = conn.execute("DELETE FROM emails WHERE email = ? AND user_id = ?", (email, user_id))
     conn.commit()
     conn.close()
     return cur.rowcount > 0
@@ -739,12 +787,12 @@ TEMPLATE_VARS = {
 }
 
 
-def add_template(db_path: str, name: str, body: str) -> int:
-    """Добавить шаблон. Возвращает id."""
+def add_template(db_path: str, name: str, body: str, user_id: int = 0) -> int:
+    """Добавить шаблон воркеру. Возвращает id."""
     conn = get_conn(db_path)
     cur = conn.execute(
-        "INSERT INTO email_templates (name, body, created_at) VALUES (?, ?, ?)",
-        (name.strip(), body.strip(), datetime.utcnow().isoformat()),
+        "INSERT INTO email_templates (name, body, created_at, user_id) VALUES (?, ?, ?, ?)",
+        (name.strip(), body.strip(), datetime.utcnow().isoformat(), user_id),
     )
     conn.commit()
     rowid = cur.lastrowid
@@ -752,48 +800,62 @@ def add_template(db_path: str, name: str, body: str) -> int:
     return rowid or 0
 
 
-def get_templates(db_path: str) -> list[tuple[int, str, str, str]]:
-    """(id, name, body, created_at) список шаблонов."""
+def get_templates(db_path: str, user_id: int) -> list[tuple[int, str, str, str]]:
+    """(id, name, body, created_at) список шаблонов воркера."""
     conn = get_conn(db_path)
     rows = conn.execute(
-        "SELECT id, name, body, created_at FROM email_templates ORDER BY id"
+        "SELECT id, name, body, created_at FROM email_templates WHERE user_id = ? ORDER BY id",
+        (user_id,),
     ).fetchall()
     conn.close()
     return [(r[0], r[1] or "", r[2] or "", r[3] or "") for r in rows]
 
 
-def get_template(db_path: str, template_id: int) -> tuple[str, str] | None:
-    """(name, body) или None."""
+def get_template(db_path: str, template_id: int, user_id: int | None = None) -> tuple[str, str] | None:
+    """(name, body) или None. user_id=None — без проверки владельца."""
     conn = get_conn(db_path)
-    row = conn.execute("SELECT name, body FROM email_templates WHERE id = ?", (template_id,)).fetchone()
+    if user_id is not None:
+        row = conn.execute("SELECT name, body FROM email_templates WHERE id = ? AND user_id = ?", (template_id, user_id)).fetchone()
+    else:
+        row = conn.execute("SELECT name, body FROM email_templates WHERE id = ?", (template_id,)).fetchone()
     conn.close()
     return (row[0], row[1]) if row else None
 
 
-def update_template(db_path: str, template_id: int, name: str, body: str) -> bool:
+def update_template(db_path: str, template_id: int, name: str, body: str, user_id: int | None = None) -> bool:
     conn = get_conn(db_path)
-    cur = conn.execute(
-        "UPDATE email_templates SET name = ?, body = ? WHERE id = ?",
-        (name.strip(), body.strip(), template_id),
-    )
+    if user_id is not None:
+        cur = conn.execute(
+            "UPDATE email_templates SET name = ?, body = ? WHERE id = ? AND user_id = ?",
+            (name.strip(), body.strip(), template_id, user_id),
+        )
+    else:
+        cur = conn.execute(
+            "UPDATE email_templates SET name = ?, body = ? WHERE id = ?",
+            (name.strip(), body.strip(), template_id),
+        )
     conn.commit()
     conn.close()
     return cur.rowcount > 0
 
 
-def delete_template(db_path: str, template_id: int) -> bool:
+def delete_template(db_path: str, template_id: int, user_id: int | None = None) -> bool:
     conn = get_conn(db_path)
-    cur = conn.execute("DELETE FROM email_templates WHERE id = ?", (template_id,))
+    if user_id is not None:
+        cur = conn.execute("DELETE FROM email_templates WHERE id = ? AND user_id = ?", (template_id, user_id))
+    else:
+        cur = conn.execute("DELETE FROM email_templates WHERE id = ?", (template_id,))
     conn.commit()
     conn.close()
     return cur.rowcount > 0
 
 
-def get_active_template_id(db_path: str) -> int | None:
-    """ID активного шаблона или None."""
+def get_active_template_id(db_path: str, user_id: int) -> int | None:
+    """ID активного шаблона воркера или None."""
     conn = get_conn(db_path)
     row = conn.execute(
-        "SELECT value FROM rotation_state WHERE key = 'active_template_id'"
+        "SELECT value FROM rotation_state WHERE key = ?",
+        (f"active_template_id_{user_id}",),
     ).fetchone()
     conn.close()
     if not row or not row[0]:
@@ -804,15 +866,16 @@ def get_active_template_id(db_path: str) -> int | None:
         return None
 
 
-def set_active_template_id(db_path: str, template_id: int | None) -> None:
-    """Установить активный шаблон (None = сбросить)."""
+def set_active_template_id(db_path: str, template_id: int | None, user_id: int = 0) -> None:
+    """Установить активный шаблон воркера (None = сбросить)."""
     conn = get_conn(db_path)
+    key = f"active_template_id_{user_id}"
     if template_id is None:
-        conn.execute("DELETE FROM rotation_state WHERE key = 'active_template_id'")
+        conn.execute("DELETE FROM rotation_state WHERE key = ?", (key,))
     else:
         conn.execute(
-            "INSERT OR REPLACE INTO rotation_state (key, value) VALUES ('active_template_id', ?)",
-            (str(template_id),),
+            "INSERT OR REPLACE INTO rotation_state (key, value) VALUES (?, ?)",
+            (key, str(template_id)),
         )
     conn.commit()
     conn.close()

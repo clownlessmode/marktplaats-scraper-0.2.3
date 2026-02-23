@@ -75,9 +75,10 @@ def send_seller_email(
     listing: object,
     sender_email: str,
     sender_password: str,
+    user_id: int,
 ) -> tuple[bool, str | None]:
     """
-    Отправить письмо продавцу.
+    Отправить письмо продавцу. user_id — воркер, чьи почта и шаблон используются.
     listing — объект с атрибутами: title, price_cents, listing_url, seller_name, city_name,
     category_verticals/category_ru, description, item_id.
     Возвращает True при успехе, False при ошибке (почта будет помечена blocked).
@@ -95,12 +96,12 @@ def send_seller_email(
         logger.warning("Email: нет отправителя или пароля")
         return False, None
 
-    # Формируем тело из активного шаблона
-    template_id = get_active_template_id(db_path)
+    # Формируем тело из активного шаблона воркера
+    template_id = get_active_template_id(db_path, user_id)
     if not template_id:
-        logger.warning("Email: активный шаблон не выбран")
+        logger.warning("Email: активный шаблон не выбран у воркера %s", user_id)
         return False, None
-    tpl = get_template(db_path, template_id)
+    tpl = get_template(db_path, template_id, user_id)
     if not tpl:
         logger.warning("Email: шаблон %s не найден", template_id)
         return False, None
@@ -133,20 +134,20 @@ def send_seller_email(
             smtp.starttls()
             smtp.login(sender_email, sender_password)
             smtp.sendmail(sender_email, [recipient], msg.as_string())
-        set_last_used_email(db_path, sender_email)
-        set_last_email_for_listing(db_path, sender_email)
+        set_last_used_email(db_path, sender_email, user_id)
+        set_last_email_for_listing(db_path, user_id, sender_email)
         logger.info("Email: отправлено на %s (с %s)", recipient, sender_email)
         return True, recipient
     except smtplib.SMTPAuthenticationError as e:
         err = str(e)
         logger.warning("Email auth failed for %s: %s", sender_email[:20], err)
-        mark_email_blocked(db_path, sender_email)
+        mark_email_blocked(db_path, sender_email, user_id)
         _notify_admin_email_blocked(db_path, sender_email, err)
         return False, None
     except Exception as e:
         err = str(e)
         logger.warning("Email send failed for %s: %s", sender_email[:20], err)
-        mark_email_blocked(db_path, sender_email)
+        mark_email_blocked(db_path, sender_email, user_id)
         _notify_admin_email_blocked(db_path, sender_email, err)
         return False, None
 
@@ -157,6 +158,7 @@ def send_test_email(
     sender_password: str,
     recipient: str | None = None,
     mark_blocked_on_fail: bool = True,
+    user_id: int = 0,
 ) -> bool:
     """
     Отправить тестовое письмо на recipient (по умолчанию TEST_MAIL).
@@ -177,53 +179,62 @@ def send_test_email(
             smtp.starttls()
             smtp.login(sender_email, sender_password)
             smtp.sendmail(sender_email, [to_addr], msg.as_string())
-        set_last_used_email(db_path, sender_email)
-        unblock_email(db_path, sender_email)  # при успехе снять блок если был
+        set_last_used_email(db_path, sender_email, user_id)
+        unblock_email(db_path, sender_email, user_id)  # при успехе снять блок если был
         return True
     except smtplib.SMTPAuthenticationError as e:
         err = str(e)
         logger.warning("Test email auth failed for %s: %s", sender_email[:20], err)
         if mark_blocked_on_fail:
-            mark_email_blocked(db_path, sender_email)
+            mark_email_blocked(db_path, sender_email, user_id)
             _notify_admin_email_blocked(db_path, sender_email, err)
         return False
     except Exception as e:
         err = str(e)
         logger.warning("Test email send failed for %s: %s", sender_email[:20], err)
         if mark_blocked_on_fail:
-            mark_email_blocked(db_path, sender_email)
+            mark_email_blocked(db_path, sender_email, user_id)
             _notify_admin_email_blocked(db_path, sender_email, err)
         return False
 
 
-def test_all_emails(db_path: str) -> tuple[int, int, list[str]]:
+def test_all_emails(db_path: str, user_id: int | None = None) -> tuple[int, int, list[str]]:
     """
-    Протестировать все почты. Шлёт тест на TEST_MAIL.
+    Протестировать все почты. user_id=None — все почты всех воркеров.
     Возвращает (ok_count, failed_count, failed_emails).
     """
-    all_emails = get_all_emails(db_path)
+    all_emails = get_all_emails(db_path, user_id)
     ok_count = 0
     failed_count = 0
     failed_emails: list[str] = []
-    for email, password, blocked in all_emails:
-        if send_test_email(db_path, email, password):
-            ok_count += 1
-        else:
-            failed_count += 1
-            failed_emails.append(email)
+    if user_id is not None:
+        for email, password, _ in all_emails:
+            if send_test_email(db_path, email, password, user_id=user_id):
+                ok_count += 1
+            else:
+                failed_count += 1
+                failed_emails.append(email)
+    else:
+        for uid, email, password, _ in all_emails:
+            if send_test_email(db_path, email, password, user_id=uid):
+                ok_count += 1
+            else:
+                failed_count += 1
+                failed_emails.append(email)
     return ok_count, failed_count, failed_emails
 
 
-def try_send_listing_email(db_path: str, listing: object) -> tuple[bool, str | None]:
+def try_send_listing_email(db_path: str, listing: object, worker_id: int | None) -> tuple[bool, str | None]:
     """
-    Round-robin по активным почтам: 1-е объявление — почта 1, 2-е — почта 2, 3-е — почта 3,
-    далее цикл. Только не заблокированные почты.
+    Round-robin по активным почтам воркера. worker_id=None — пропуск (нет воркера на смене).
     При ошибке — пометить почту blocked, уведомить админа.
     Возвращает (успех, recipient или None).
     """
-    creds = get_next_email_for_listing(db_path)
+    if worker_id is None:
+        return False, None
+    creds = get_next_email_for_listing(db_path, worker_id)
     if not creds:
-        logger.warning("Email: нет доступных почт")
+        logger.warning("Email: нет доступных почт у воркера %s", worker_id)
         return False, None
     sender_email, sender_password = creds
-    return send_seller_email(db_path, listing, sender_email, sender_password)
+    return send_seller_email(db_path, listing, sender_email, sender_password, worker_id)

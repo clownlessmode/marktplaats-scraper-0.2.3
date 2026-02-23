@@ -210,10 +210,11 @@ def send_listings_batch(listings: list) -> None:
             pass
 
 
-def send_listing_to_next_worker(listing, db_path: str) -> bool:
+def send_listing_to_next_worker(listing, db_path: str) -> tuple[bool, int | None]:
     """
     Round-robin: отправить объявление следующему воркеру на смене.
     Если воркеров нет — не отправлять.
+    Возвращает (успех, user_id воркера или None).
     """
     from .database import (
         get_next_worker_for_listing,
@@ -224,7 +225,7 @@ def send_listing_to_next_worker(listing, db_path: str) -> bool:
     db = db_path or DB_PATH
     user_id = get_next_worker_for_listing(db)
     if user_id is None:
-        return False
+        return False, None
     chat_id = str(user_id)
     ok = send_listing_to_telegram(chat_id, listing)
     if ok:
@@ -232,4 +233,4 @@ def send_listing_to_next_worker(listing, db_path: str) -> bool:
         item_id = getattr(listing, "item_id", None) or getattr(listing, "id", "")
         if item_id:
             record_worker_listing(db, str(item_id), user_id)
-    return ok
+    return ok, user_id

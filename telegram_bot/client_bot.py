@@ -230,8 +230,8 @@ async def cb_list_today(cb: CallbackQuery) -> None:
 
 
 # --- Меню почт для воркеров ---
-def _worker_emails_kb() -> InlineKeyboardMarkup:
-    count = get_emails_count(DB_PATH)
+def _worker_emails_kb(user_id: int) -> InlineKeyboardMarkup:
+    count = get_emails_count(DB_PATH, user_id)
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Добавить (mail:apppassword)", callback_data="worker_emails_add")],
         [InlineKeyboardButton(text="📤 Загрузить CSV", callback_data="worker_emails_upload")],
@@ -247,13 +247,13 @@ async def cb_worker_emails(cb: CallbackQuery, state: FSMContext) -> None:
         await cb.answer()
         return
     await state.clear()
-    count = get_emails_count(DB_PATH)
+    count = get_emails_count(DB_PATH, user_id)
     await cb.message.edit_text(
         f"📧 <b>База почт</b>\n\nВсего: {count}\n\n"
         "• Добавить — введите mail:apppassword (только Gmail, через Enter — несколько)\n"
         "• Загрузить CSV — пришлите файл .csv\n"
         "• Список — просмотр почт",
-        reply_markup=_worker_emails_kb(),
+        reply_markup=_worker_emails_kb(user_id),
         parse_mode="HTML",
     )
     await cb.answer()
@@ -312,10 +312,10 @@ async def msg_worker_emails_add_text(msg: Message, state: FSMContext) -> None:
     if not pairs:
         await msg.answer("❌ Не найдено валидных строк. Формат: mail@gmail.com:apppassword")
         return
-    added, skipped = add_emails_batch(DB_PATH, pairs)
+    added, skipped = add_emails_batch(DB_PATH, pairs, user_id)
     await state.clear()
     await msg.answer(f"✅ Добавлено: {added}, пропущено (дубли): {skipped}")
-    await msg.answer("📧 База почт", reply_markup=_worker_emails_kb())
+    await msg.answer("📧 База почт", reply_markup=_worker_emails_kb(user_id))
 
 
 @router.callback_query(F.data == "worker_emails_upload")
@@ -350,8 +350,8 @@ async def cb_worker_emails_list(cb: CallbackQuery) -> None:
         page = 0
     per_page = 15
     offset = page * per_page
-    rows = get_emails(DB_PATH, limit=per_page, offset=offset)
-    total = get_emails_count(DB_PATH)
+    rows = get_emails(DB_PATH, user_id, limit=per_page, offset=offset)
+    total = get_emails_count(DB_PATH, user_id)
     if not rows:
         text = "📋 <b>Список почт</b>\n\nПусто."
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -397,10 +397,10 @@ async def msg_worker_emails_csv(msg: Message, state: FSMContext) -> None:
         if not pairs:
             await msg.answer("❌ В CSV не найдено email. Колонки: email, apppassword (только Gmail)")
             return
-        added, skipped = add_emails_batch(DB_PATH, pairs)
+        added, skipped = add_emails_batch(DB_PATH, pairs, user_id)
         await state.clear()
         await msg.answer(f"✅ Из CSV добавлено: {added}, пропущено (дубли): {skipped}")
-        await msg.answer("📧 База почт", reply_markup=_worker_emails_kb())
+        await msg.answer("📧 База почт", reply_markup=_worker_emails_kb(user_id))
     except Exception as e:
         await msg.answer(f"❌ Ошибка: {e}")
 
@@ -421,9 +421,9 @@ def _template_example() -> str:
     )
 
 
-def _render_worker_templates() -> tuple[str, InlineKeyboardMarkup]:
-    templates = get_templates(DB_PATH)
-    active_id = get_active_template_id(DB_PATH)
+def _render_worker_templates(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    templates = get_templates(DB_PATH, user_id)
+    active_id = get_active_template_id(DB_PATH, user_id)
     if not templates:
         text = "📝 <b>Шаблоны сообщений</b>\n\nНет шаблонов."
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -457,7 +457,7 @@ async def cb_worker_templates(cb: CallbackQuery, state: FSMContext) -> None:
         await cb.answer()
         return
     await state.clear()
-    text, kb = _render_worker_templates()
+    text, kb = _render_worker_templates(user_id)
     await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     await cb.answer()
 
@@ -516,16 +516,16 @@ async def msg_worker_tpl_body(msg: Message, state: FSMContext) -> None:
     data = await state.get_data()
     edit_id = data.get("tpl_edit_id")
     if edit_id:
-        tpl = get_template(DB_PATH, edit_id)
+        tpl = get_template(DB_PATH, edit_id, user_id)
         name = tpl[0] if tpl else "Шаблон"
-        update_template(DB_PATH, edit_id, name, body)
+        update_template(DB_PATH, edit_id, name, body, user_id)
         await msg.answer(f"✅ Шаблон «{name}» обновлён")
     else:
         name = data.get("tpl_name", "Без названия")
-        add_template(DB_PATH, name, body)
+        add_template(DB_PATH, name, body, user_id)
         await msg.answer(f"✅ Шаблон «{name}» добавлен")
     await state.clear()
-    text, kb = _render_worker_templates()
+    text, kb = _render_worker_templates(user_id)
     await msg.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
@@ -540,12 +540,12 @@ async def cb_worker_tpl_activate(cb: CallbackQuery) -> None:
     except ValueError:
         await cb.answer()
         return
-    tpl = get_template(DB_PATH, tid)
+    tpl = get_template(DB_PATH, tid, user_id)
     if not tpl:
         await cb.answer("Шаблон не найден", show_alert=True)
         return
-    set_active_template_id(DB_PATH, tid)
-    text, kb = _render_worker_templates()
+    set_active_template_id(DB_PATH, tid, user_id)
+    text, kb = _render_worker_templates(user_id)
     await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     await cb.answer("✅ Шаблон активирован", show_alert=True)
 
@@ -561,7 +561,7 @@ async def cb_worker_tpl_edit(cb: CallbackQuery, state: FSMContext) -> None:
     except ValueError:
         await cb.answer()
         return
-    tpl = get_template(DB_PATH, tid)
+    tpl = get_template(DB_PATH, tid, user_id)
     if not tpl:
         await cb.answer("Не найден", show_alert=True)
         return
@@ -590,10 +590,10 @@ async def cb_worker_tpl_delete(cb: CallbackQuery) -> None:
     except ValueError:
         await cb.answer()
         return
-    if delete_template(DB_PATH, tid):
-        if get_active_template_id(DB_PATH) == tid:
-            set_active_template_id(DB_PATH, None)
-        text, kb = _render_worker_templates()
+    if delete_template(DB_PATH, tid, user_id):
+        if get_active_template_id(DB_PATH, user_id) == tid:
+            set_active_template_id(DB_PATH, None, user_id)
+        text, kb = _render_worker_templates(user_id)
         await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
         await cb.answer("🗑 Шаблон удалён", show_alert=True)
     else:

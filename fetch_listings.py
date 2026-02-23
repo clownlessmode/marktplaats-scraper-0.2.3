@@ -583,10 +583,10 @@ async def _worker_category(
                     remaining_limit[0] -= 1
                 row["category_ru"] = CAT_ID_TO_RU.get(cat_id, "")
                 ns = SimpleNamespace(**row)
-                ok = send_listing_to_next_worker(ns, db_path)
+                ok, worker_id = send_listing_to_next_worker(ns, db_path)
                 print(f"      📤 Telegram: {'OK' if ok else 'пропуск (нет воркеров на смене)'} «{title[:40]}»", flush=True)
                 try:
-                    email_ok, recipient = try_send_listing_email(db_path, ns)
+                    email_ok, recipient = try_send_listing_email(db_path, ns, worker_id)
                     if email_ok and recipient:
                         print(f"      📧 Email: отправлено на {recipient} «{title[:40]}»", flush=True)
                     elif email_ok:

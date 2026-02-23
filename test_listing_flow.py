@@ -99,12 +99,12 @@ def run_test(db_path: str) -> None:
     row["category_ru"] = "Телекоммуникация"
 
     # 2. Отправка воркеру (round-robin)
-    ok_tg = send_listing_to_next_worker(ns, db_path)
+    ok_tg, worker_id = send_listing_to_next_worker(ns, db_path)
     print(f"2. {'✓' if ok_tg else '✗'} Telegram воркеру: {'OK' if ok_tg else 'пропуск (нет воркеров на смене)'} «{title}»")
 
-    # 3. Письмо продавцу (активный шаблон + случайная почта)
+    # 3. Письмо продавцу (почты и шаблон воркера, получившего объявление)
     try:
-        email_ok, recipient = try_send_listing_email(db_path, ns)
+        email_ok, recipient = try_send_listing_email(db_path, ns, worker_id)
         if email_ok and recipient:
             print(f"3. ✓ Email продавцу: отправлено на {recipient} «{title}»")
         else:
