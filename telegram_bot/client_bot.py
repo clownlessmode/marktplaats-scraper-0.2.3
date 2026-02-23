@@ -489,9 +489,25 @@ async def msg_worker_bulk_csv(msg: Message, state: FSMContext) -> None:
             )
             await state.clear()
             return
+        active_before = get_emails_count(DB_PATH, user_id, include_blocked=False)
+        template_id = get_active_template_id(DB_PATH, user_id)
+        if active_before == 0:
+            await status_msg.edit_text(
+                "❌ <b>Нет активных почт</b>\n\n"
+                "Добавьте почты в меню «Почты» и нажмите «Разблокировать» на заблокированных (🚫).",
+                parse_mode="HTML",
+            )
+            await state.clear()
+            return
+        if not template_id:
+            await status_msg.edit_text(
+                "❌ <b>Нет активного шаблона</b>\n\nВыберите шаблон в меню «Шаблоны».",
+                parse_mode="HTML",
+            )
+            await state.clear()
+            return
         await status_msg.edit_text(f"⏳ Отправляю письма ({len(listings)} шт.)... Не закрывайте бота.")
         loop = asyncio.get_event_loop()
-        active_before = get_emails_count(DB_PATH, user_id, include_blocked=False)
         ok, fail, recipients = await loop.run_in_executor(
             None, lambda: send_bulk_listing_emails(DB_PATH, user_id, listings)
         )
@@ -502,8 +518,14 @@ async def msg_worker_bulk_csv(msg: Message, state: FSMContext) -> None:
             f"❌ Ошибок: {fail}\n"
             f"📋 Всего строк: {len(listings)}"
         )
-        if fail == len(listings) and active_before == 0:
-            text += "\n\n⚠️ <b>Нет активных почт</b> — добавьте почты и нажмите «Разблокировать» на заблокированных (🚫)."
+        if fail == len(listings):
+            active_after = get_emails_count(DB_PATH, user_id, include_blocked=False)
+            if active_after == 0 and active_before > 0:
+                text += "\n\n⚠️ <b>Почты заблокированы</b> после ошибок SMTP. Нажмите «Разблокировать» в списке почт."
+            elif active_before == 0:
+                text += "\n\n⚠️ <b>Нет активных почт</b> — добавьте почты и нажмите «Разблокировать» на заблокированных (🚫)."
+            elif not template_id:
+                text += "\n\n⚠️ <b>Нет активного шаблона</b> — выберите шаблон в меню «Шаблоны»."
         if recipients:
             text += f"\n\nПервые получатели: {', '.join(recipients[:5])}"
             if len(recipients) > 5:

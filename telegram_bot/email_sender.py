@@ -218,12 +218,17 @@ def send_seller_email(
         return False, None
     except Exception as e:
         err = str(e)
+        err_type = type(e).__name__
         logger.error(
             "SMTP: ошибка отправки | from=%s | to=%s | err=%s | type=%s\n%s",
-            sender_email[:25], recipient, err, type(e).__name__, traceback.format_exc(),
+            sender_email[:25], recipient, err, err_type, traceback.format_exc(),
         )
-        mark_email_blocked(db_path, sender_email, user_id)
-        _notify_admin_email_blocked(db_path, sender_email, err)
+        # Блокируем только при ошибке авторизации. Прокси/сеть — не блокируем (временные сбои).
+        if "socks" in err_type.lower() or "proxy" in err_type.lower() or "connection" in err_type.lower() or "unreachable" in err.lower():
+            logger.warning("SMTP: сетевая/прокси ошибка — почта НЕ заблокирована, можно повторить позже")
+        else:
+            mark_email_blocked(db_path, sender_email, user_id)
+            _notify_admin_email_blocked(db_path, sender_email, err)
         return False, None
 
 
@@ -271,11 +276,13 @@ def send_test_email(
         return False
     except Exception as e:
         err = str(e)
+        err_type = type(e).__name__
         logger.error(
             "SMTP test: send failed | from=%s | to=%s | err=%s | type=%s\n%s",
-            sender_email[:25], to_addr, err, type(e).__name__, traceback.format_exc(),
+            sender_email[:25], to_addr, err, err_type, traceback.format_exc(),
         )
-        if mark_blocked_on_fail:
+        # Прокси/сеть — не блокируем
+        if mark_blocked_on_fail and "socks" not in err_type.lower() and "proxy" not in err_type.lower() and "connection" not in err_type.lower() and "unreachable" not in err.lower():
             mark_email_blocked(db_path, sender_email, user_id)
             _notify_admin_email_blocked(db_path, sender_email, err)
         return False
@@ -319,12 +326,20 @@ def send_bulk_listing_emails(
     ok_count = 0
     fail_count = 0
     recipients: list[str] = []
+    db_abs = str(Path(db_path).resolve())
     total_emails = get_emails_count(db_path, user_id, include_blocked=True)
     active_emails = get_emails_count(db_path, user_id, include_blocked=False)
+    template_id = get_active_template_id(db_path, user_id)
     logger.info(
-        "SMTP bulk: старт | user_id=%s | строк=%s | почт всего=%s | активных=%s (заблокированных=%s)",
-        user_id, len(listings), total_emails, active_emails, total_emails - active_emails,
+        "SMTP bulk: старт | user_id=%s | db=%s | строк=%s | почт всего=%s | активных=%s | шаблон=%s",
+        user_id, db_abs, len(listings), total_emails, active_emails, "есть" if template_id else "НЕТ",
     )
+    if active_emails == 0:
+        logger.warning("SMTP bulk: нет активных почт у user_id=%s, пропуск всей рассылки", user_id)
+        return 0, len(listings), []
+    if not template_id:
+        logger.warning("SMTP bulk: нет активного шаблона у user_id=%s, пропуск всей рассылки", user_id)
+        return 0, len(listings), []
     for i, item in enumerate(listings):
         if isinstance(item, dict):
             from types import SimpleNamespace
@@ -333,7 +348,11 @@ def send_bulk_listing_emails(
             ns = item
         creds = get_next_email_for_listing(db_path, user_id)
         if not creds:
-            logger.warning("SMTP bulk: нет почт у user_id=%s, строка %s/%s", user_id, i + 1, len(listings))
+            active_now = get_emails_count(db_path, user_id, include_blocked=False)
+            logger.warning(
+                "SMTP bulk: нет почт у user_id=%s, строка %s/%s (активных сейчас=%s)",
+                user_id, i + 1, len(listings), active_now,
+            )
             fail_count += 1
             continue
         sender_email, sender_password = creds
