@@ -24,6 +24,7 @@ from .database import (
     get_emails,
     get_emails_count,
     add_emails_batch,
+    delete_email,
     parse_emails_text,
     parse_emails_csv,
     parse_listings_csv,
@@ -345,6 +346,39 @@ async def cb_worker_emails_upload(cb: CallbackQuery, state: FSMContext) -> None:
     await cb.answer()
 
 
+def _build_emails_list_page(user_id: int, page: int) -> tuple[str, InlineKeyboardMarkup]:
+    """Собрать текст и клавиатуру для страницы списка почт."""
+    per_page = 15
+    offset = page * per_page
+    rows = get_emails(DB_PATH, user_id, limit=per_page, offset=offset)
+    total = get_emails_count(DB_PATH, user_id)
+    if not rows:
+        text = "📋 <b>Список почт</b>\n\nПусто."
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ К меню почт", callback_data="worker_emails")],
+        ])
+        return text, kb
+    lines = [f"📋 <b>Почты</b> (стр. {page + 1}, всего {total})\n"]
+    btns = []
+    for idx, (email, _, _, blocked) in enumerate(rows):
+        lines.append(f"• <code>{email}</code>" + (" 🚫" if blocked else ""))
+        btns.append([
+            InlineKeyboardButton(text=f"🗑 {email[:30]}{'…' if len(email) > 30 else ''}", callback_data=f"worker_email_del_{page}_{idx}"),
+        ])
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"worker_emails_list_{page - 1}"))
+    if offset + len(rows) < total:
+        nav.append(InlineKeyboardButton(text="Вперёд ▶️", callback_data=f"worker_emails_list_{page + 1}"))
+    if nav:
+        btns.append(nav)
+    btns.append([InlineKeyboardButton(text="◀️ К меню почт", callback_data="worker_emails")])
+    text = "\n".join(lines)
+    if len(text) > 4000:
+        text = text[:3997] + "..."
+    return text, InlineKeyboardMarkup(inline_keyboard=btns)
+
+
 @router.callback_query(F.data.startswith("worker_emails_list_"))
 async def cb_worker_emails_list(cb: CallbackQuery) -> None:
     user_id = cb.from_user.id if cb.from_user else 0
@@ -355,34 +389,40 @@ async def cb_worker_emails_list(cb: CallbackQuery) -> None:
         page = int(cb.data.replace("worker_emails_list_", ""))
     except ValueError:
         page = 0
+    text, kb = _build_emails_list_page(user_id, page)
+    await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("worker_email_del_"))
+async def cb_worker_email_delete(cb: CallbackQuery) -> None:
+    """Удалить почту воркера по page и idx в списке."""
+    user_id = cb.from_user.id if cb.from_user else 0
+    if is_blocked(DB_PATH, user_id) or not is_authorized(DB_PATH, user_id):
+        await cb.answer()
+        return
+    try:
+        parts = cb.data.replace("worker_email_del_", "").split("_")
+        page = int(parts[0])
+        idx = int(parts[1])
+    except (ValueError, IndexError):
+        await cb.answer("Ошибка", show_alert=True)
+        return
     per_page = 15
     offset = page * per_page
     rows = get_emails(DB_PATH, user_id, limit=per_page, offset=offset)
-    total = get_emails_count(DB_PATH, user_id)
-    if not rows:
-        text = "📋 <b>Список почт</b>\n\nПусто."
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="◀️ К меню почт", callback_data="worker_emails")],
-        ])
+    if idx < 0 or idx >= len(rows):
+        await cb.answer("Почта не найдена", show_alert=True)
+        return
+    email = rows[idx][0]
+    if delete_email(DB_PATH, email, user_id):
+        await cb.answer(f"✅ {email} удалена")
+        total = get_emails_count(DB_PATH, user_id)
+        new_page = min(page, max(0, (total - 1) // per_page)) if total > 0 else 0
+        text, kb = _build_emails_list_page(user_id, new_page)
+        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     else:
-        lines = [f"📋 <b>Почты</b> (стр. {page + 1}, всего {total})\n"]
-        for email, _, _, blocked in rows:
-            lines.append(f"• <code>{email}</code>" + (" 🚫" if blocked else ""))
-        btns = []
-        nav = []
-        if page > 0:
-            nav.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"worker_emails_list_{page - 1}"))
-        if offset + len(rows) < total:
-            nav.append(InlineKeyboardButton(text="Вперёд ▶️", callback_data=f"worker_emails_list_{page + 1}"))
-        if nav:
-            btns.append(nav)
-        btns.append([InlineKeyboardButton(text="◀️ К меню почт", callback_data="worker_emails")])
-        text = "\n".join(lines)
-        if len(text) > 4000:
-            text = text[:3997] + "..."
-        kb = InlineKeyboardMarkup(inline_keyboard=btns)
-    await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    await cb.answer()
+        await cb.answer("Не удалось удалить", show_alert=True)
 
 
 @router.message(WorkerBulkMailState.waiting_csv, F.document)
