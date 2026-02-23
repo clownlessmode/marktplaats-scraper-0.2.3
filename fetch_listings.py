@@ -44,7 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from telegram_bot.database import init_db, get_conn, get_workers_on_shift
 from telegram_bot.telegram_sender import send_listing_to_next_worker, send_round_summary
 from telegram_bot.email_sender import try_send_listing_email
-from telegram_bot.config import TELEGRAM_CHAT_ID, ENVIRONMENT
+from telegram_bot.config import TELEGRAM_CHAT_ID, ENVIRONMENT, DB_PATH
 
 MARTKPLAATS_BASE_URL = "https://marktplaats.nl"
 # Сортировка: сначала новые (offeredSince:Altijd = все, sortBy=SORT_INDEX = по дате)
@@ -672,7 +672,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Скрапер marktplaats: категории, товары < 3ч, БД, бесконечный цикл")
     parser.add_argument("--socks5", action="store_true", help="Использовать SOCKS5")
     parser.add_argument("--no-proxy", action="store_true", help="Без прокси")
-    parser.add_argument("--db-path", default="bot.db", help="Путь к SQLite БД")
+    parser.add_argument("--db-path", default=DB_PATH, help="Путь к SQLite БД (по умолчанию из config)")
     parser.add_argument("--timeout", type=int, default=30)
     parser.add_argument("--limit", type=int, default=0, help="Макс. товаров за раунд (0 = без лимита)")
     parser.add_argument("--max-age", type=float, default=MAX_AGE_HOURS, help="Макс. возраст в часах")
@@ -697,8 +697,9 @@ def main() -> int:
             return 1
     else:
         proxies = [""]  # без прокси — один "пустой" прокси
+    db_abs = str(Path(args.db_path).resolve())
     print(f"Прокси: {'нет' if args.no_proxy else f'{len(proxies)} шт.'} ({'SOCKS5' if args.socks5 else 'HTTP'})")
-    print(f"БД: {args.db_path}")
+    print(f"БД: {db_abs}")
     print(f"Макс. возраст: {args.max_age} ч")
     print(f"Пауза: {args.pause_minutes} мин.")
     print(f"Параллельно: {args.concurrent} запросов")
