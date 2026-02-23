@@ -385,8 +385,54 @@ async def cb_worker_emails_list(cb: CallbackQuery) -> None:
     await cb.answer()
 
 
+@router.message(WorkerBulkMailState.waiting_csv, F.document)
+async def msg_worker_bulk_csv(msg: Message, state: FSMContext) -> None:
+    """CSV для рассылки — обрабатывается первым, когда воркер в режиме рассылки."""
+    user_id = msg.from_user.id if msg.from_user else 0
+    if is_blocked(DB_PATH, user_id) or not is_authorized(DB_PATH, user_id):
+        return
+    doc = msg.document
+    if not doc or not doc.file_name or not doc.file_name.lower().endswith(".csv"):
+        await msg.answer("❌ Нужен файл .csv")
+        return
+    status_msg = await msg.answer("⏳ Обрабатываю CSV...")
+    try:
+        file = await msg.bot.get_file(doc.file_id)
+        data = await msg.bot.download_file(file.file_path)
+        content = data.read().decode("utf-8", errors="replace")
+        listings = parse_listings_csv(content)
+        if not listings:
+            await status_msg.edit_text(
+                "❌ Не удалось распарсить CSV.\n\n"
+                "Нужны колонки: <b>Ник Продавца</b>, <b>Ссылка на товар</b> (marktplaats).",
+                parse_mode="HTML",
+            )
+            await state.clear()
+            return
+        ok, fail, recipients = send_bulk_listing_emails(DB_PATH, user_id, listings)
+        await state.clear()
+        text = (
+            f"✅ <b>Рассылка завершена</b>\n\n"
+            f"📧 Отправлено: {ok}\n"
+            f"❌ Ошибок: {fail}\n"
+            f"📋 Всего строк: {len(listings)}"
+        )
+        if recipients:
+            text += f"\n\nПервые получатели: {', '.join(recipients[:5])}"
+            if len(recipients) > 5:
+                text += f" ..."
+        await status_msg.edit_text(text, parse_mode="HTML")
+        on_shift = is_shift_active(DB_PATH, user_id)
+        await msg.answer("Главное меню", reply_markup=_worker_kb(on_shift))
+    except Exception as e:
+        logger.exception("Bulk mail: %s", e)
+        await status_msg.edit_text(f"❌ Ошибка: {e}")
+        await state.clear()
+
+
 @router.message(F.document)
 async def msg_worker_emails_csv(msg: Message, state: FSMContext) -> None:
+    """CSV для импорта почт (только когда воркер в меню «Почты» → Загрузить CSV)."""
     user_id = msg.from_user.id if msg.from_user else 0
     if is_blocked(DB_PATH, user_id) or not is_authorized(DB_PATH, user_id):
         return
@@ -617,50 +663,6 @@ async def cb_worker_bulk_mail(cb: CallbackQuery, state: FSMContext) -> None:
         parse_mode="HTML",
     )
     await cb.answer()
-
-
-@router.message(WorkerBulkMailState.waiting_csv, F.document)
-async def msg_worker_bulk_csv(msg: Message, state: FSMContext) -> None:
-    user_id = msg.from_user.id if msg.from_user else 0
-    if is_blocked(DB_PATH, user_id) or not is_authorized(DB_PATH, user_id):
-        return
-    doc = msg.document
-    if not doc or not doc.file_name or not doc.file_name.lower().endswith(".csv"):
-        await msg.answer("❌ Нужен файл .csv")
-        return
-    status_msg = await msg.answer("⏳ Обрабатываю CSV...")
-    try:
-        file = await msg.bot.get_file(doc.file_id)
-        data = await msg.bot.download_file(file.file_path)
-        content = data.read().decode("utf-8", errors="replace")
-        listings = parse_listings_csv(content)
-        if not listings:
-            await status_msg.edit_text(
-                "❌ Не удалось распарсить CSV.\n\n"
-                "Нужны колонки: <b>Ник Продавца</b>, <b>Ссылка на товар</b> (marktplaats).",
-                parse_mode="HTML",
-            )
-            await state.clear()
-            return
-        ok, fail, recipients = send_bulk_listing_emails(DB_PATH, user_id, listings)
-        await state.clear()
-        text = (
-            f"✅ <b>Рассылка завершена</b>\n\n"
-            f"📧 Отправлено: {ok}\n"
-            f"❌ Ошибок: {fail}\n"
-            f"📋 Всего строк: {len(listings)}"
-        )
-        if recipients:
-            text += f"\n\nПервые получатели: {', '.join(recipients[:5])}"
-            if len(recipients) > 5:
-                text += f" ..."
-        await status_msg.edit_text(text, parse_mode="HTML")
-        on_shift = is_shift_active(DB_PATH, user_id)
-        await msg.answer("Главное меню", reply_markup=_worker_kb(on_shift))
-    except Exception as e:
-        logger.exception("Bulk mail: %s", e)
-        await status_msg.edit_text(f"❌ Ошибка: {e}")
-        await state.clear()
 
 
 @router.callback_query(F.data.startswith("worker_tpl_del_"))
