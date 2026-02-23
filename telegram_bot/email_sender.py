@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import smtplib
+import traceback
 from email.mime.text import MIMEText
 from email.utils import formataddr
 from pathlib import Path
@@ -77,10 +78,10 @@ def _create_smtp_connection(host: str = "smtp.gmail.com", port: int = 587):
                     return sock
 
             smtp = SocksSMTP(host, port)
-            logger.debug("SMTP через SOCKS5 прокси %s:%s", proxy[0], proxy[1])
+            logger.info("SMTP: соединение через SOCKS5 прокси %s:%s", proxy[0], proxy[1])
             return smtp
         except ImportError:
-            logger.warning("PySocks не установлен. pip install PySocks для SMTP через прокси.")
+            logger.warning("SMTP: PySocks не установлен. pip install PySocks для отправки через прокси.")
     return smtplib.SMTP(host, port)
 
 
@@ -149,8 +150,16 @@ def send_seller_email(
 
     subject = f"Вопрос по объявлению «{getattr(listing, 'title', '')[:50]}»"
     if not sender_email or not sender_password:
-        logger.warning("Email: нет отправителя или пароля")
+        logger.warning("SMTP: нет отправителя или пароля, пропуск")
         return False, None
+
+    logger.info(
+        "SMTP: отправка | from=%s | to=%s | subject=%s | title=%s",
+        sender_email[:20] + "..." if len(sender_email) > 20 else sender_email,
+        recipient,
+        subject[:50],
+        (getattr(listing, "title", "") or "")[:40],
+    )
 
     # Формируем тело из активного шаблона воркера
     template_id = get_active_template_id(db_path, user_id)
@@ -195,17 +204,23 @@ def send_seller_email(
             smtp.quit()
         set_last_used_email(db_path, sender_email, user_id)
         set_last_email_for_listing(db_path, user_id, sender_email)
-        logger.info("Email: отправлено на %s (с %s)", recipient, sender_email)
+        logger.info("SMTP: OK | to=%s | from=%s", recipient, sender_email[:25])
         return True, recipient
     except smtplib.SMTPAuthenticationError as e:
         err = str(e)
-        logger.warning("Email auth failed for %s: %s", sender_email[:20], err)
+        logger.error(
+            "SMTP: ошибка авторизации | from=%s | to=%s | err=%s",
+            sender_email[:25], recipient, err,
+        )
         mark_email_blocked(db_path, sender_email, user_id)
         _notify_admin_email_blocked(db_path, sender_email, err)
         return False, None
     except Exception as e:
         err = str(e)
-        logger.warning("Email send failed for %s: %s", sender_email[:20], err)
+        logger.error(
+            "SMTP: ошибка отправки | from=%s | to=%s | err=%s | type=%s\n%s",
+            sender_email[:25], recipient, err, type(e).__name__, traceback.format_exc(),
+        )
         mark_email_blocked(db_path, sender_email, user_id)
         _notify_admin_email_blocked(db_path, sender_email, err)
         return False, None
@@ -233,6 +248,7 @@ def send_test_email(
     msg["Subject"] = subject
     msg["From"] = formataddr((user_name, sender_email))
     msg["To"] = to_addr
+    logger.info("SMTP test: from=%s | to=%s", sender_email[:25], to_addr)
     try:
         smtp = _create_smtp_connection()
         try:
@@ -243,17 +259,21 @@ def send_test_email(
             smtp.quit()
         set_last_used_email(db_path, sender_email, user_id)
         unblock_email(db_path, sender_email, user_id)  # при успехе снять блок если был
+        logger.info("SMTP test: OK | from=%s", sender_email[:25])
         return True
     except smtplib.SMTPAuthenticationError as e:
         err = str(e)
-        logger.warning("Test email auth failed for %s: %s", sender_email[:20], err)
+        logger.error("SMTP test: auth failed | from=%s | err=%s", sender_email[:25], err)
         if mark_blocked_on_fail:
             mark_email_blocked(db_path, sender_email, user_id)
             _notify_admin_email_blocked(db_path, sender_email, err)
         return False
     except Exception as e:
         err = str(e)
-        logger.warning("Test email send failed for %s: %s", sender_email[:20], err)
+        logger.error(
+            "SMTP test: send failed | from=%s | to=%s | err=%s | type=%s\n%s",
+            sender_email[:25], to_addr, err, type(e).__name__, traceback.format_exc(),
+        )
         if mark_blocked_on_fail:
             mark_email_blocked(db_path, sender_email, user_id)
             _notify_admin_email_blocked(db_path, sender_email, err)
@@ -298,7 +318,8 @@ def send_bulk_listing_emails(
     ok_count = 0
     fail_count = 0
     recipients: list[str] = []
-    for item in listings:
+    logger.info("SMTP bulk: старт рассылки | user_id=%s | строк=%s", user_id, len(listings))
+    for i, item in enumerate(listings):
         if isinstance(item, dict):
             from types import SimpleNamespace
             ns = SimpleNamespace(**item)
@@ -306,6 +327,7 @@ def send_bulk_listing_emails(
             ns = item
         creds = get_next_email_for_listing(db_path, user_id)
         if not creds:
+            logger.warning("SMTP bulk: нет почт у user_id=%s, строка %s/%s", user_id, i + 1, len(listings))
             fail_count += 1
             continue
         sender_email, sender_password = creds
@@ -315,6 +337,10 @@ def send_bulk_listing_emails(
             recipients.append(recipient)
         else:
             fail_count += 1
+    logger.info(
+        "SMTP bulk: завершено | user_id=%s | ok=%s | fail=%s | всего=%s",
+        user_id, ok_count, fail_count, len(listings),
+    )
     return ok_count, fail_count, recipients
 
 
@@ -328,7 +354,7 @@ def try_send_listing_email(db_path: str, listing: object, worker_id: int | None)
         return False, None
     creds = get_next_email_for_listing(db_path, worker_id)
     if not creds:
-        logger.warning("Email: нет доступных почт у воркера %s", worker_id)
+        logger.warning("SMTP: нет доступных почт у воркера %s, пропуск", worker_id)
         return False, None
     sender_email, sender_password = creds
     return send_seller_email(db_path, listing, sender_email, sender_password, worker_id)

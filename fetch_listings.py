@@ -28,6 +28,7 @@ if _path.exists():
 import argparse
 import asyncio
 import json
+import traceback
 import re
 import sys
 import time
@@ -588,13 +589,14 @@ async def _worker_category(
                 try:
                     email_ok, recipient = try_send_listing_email(db_path, ns, worker_id)
                     if email_ok and recipient:
-                        print(f"      📧 Email: отправлено на {recipient} «{title[:40]}»", flush=True)
+                        print(f"      📧 Email: OK → {recipient} «{title[:40]}»", flush=True)
                     elif email_ok:
                         print(f"      📧 Email: OK «{title[:40]}»", flush=True)
-                    elif ENVIRONMENT == "dev":
-                        print(f"      📧 Email: пропуск (нет шаблона/почт) «{title[:40]}»", flush=True)
+                    elif worker_id and not email_ok:
+                        print(f"      📧 Email: ошибка/пропуск «{title[:40]}» (см. логи)", flush=True)
                 except Exception as ex:
-                    print(f"      ⚠ Email: {ex}", flush=True)
+                    print(f"      ⚠ Email ошибка: {ex}", flush=True)
+                    print(traceback.format_exc(), flush=True)
                 if hours is not None:
                     print(f"      ✓ [{cat_display}] «{title}» — {hours:.1f} ч")
                 else:
