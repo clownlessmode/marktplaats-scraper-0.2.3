@@ -1,0 +1,256 @@
+{
+  "itemId": "m2368778958",
+  "title": "boeken en kama sutra encyclopedie",
+  "traits": [
+    "DAG_TOPPER_7DAYS",
+    "PACKAGE_PREMIUM"
+  ],
+  "adType": "RegularPaid",
+  "bidsInfo": {
+    "isBiddingEnabled": true,
+    "isRemovingBidEnabled": false,
+    "currentMinimumBid": 6600,
+    "bids": []
+  },
+  "priceInfo": {
+    "priceCents": 6600,
+    "priceType": "MIN_BID"
+  },
+  "customDimensions": [
+    {
+      "index": "seller_account_type",
+      "name": "SellerAccountType",
+      "scopeLevel": 3,
+      "value": "Regular"
+    },
+    {
+      "index": "seller_name",
+      "name": "SellerName",
+      "scopeLevel": 3,
+      "value": "jean beckers"
+    },
+    {
+      "index": "seller_id",
+      "name": "SellerID",
+      "scopeLevel": 3,
+      "value": "51338399"
+    },
+    {
+      "index": "ad_price",
+      "name": "AskingPrice",
+      "scopeLevel": 3,
+      "value": "6600"
+    },
+    {
+      "index": "ad_type",
+      "name": "AdType",
+      "scopeLevel": 3,
+      "value": "RegularPaid"
+    },
+    {
+      "index": "shipping_method",
+      "name": "ShippingMethod",
+      "scopeLevel": 3,
+      "value": "Ophalen of Verzenden"
+    },
+    {
+      "index": "ad_seller_type",
+      "name": "SellerType",
+      "scopeLevel": 3,
+      "value": "CONSUMER"
+    },
+    {
+      "index": "buyerProtection",
+      "name": "AdHasBuyerProtection",
+      "scopeLevel": 3,
+      "value": "1"
+    },
+    {
+      "index": "shipping_price",
+      "name": "ShippingCost",
+      "scopeLevel": 3,
+      "value": "{\"DHL_Pickup\":555,\"DHL_Home\":655,\"PostNL_Pickup\":695,\"PostNL_Home\":745}"
+    }
+  ],
+  "seller": {
+    "id": 51338399,
+    "encryptedSellerId": "5FB281B3B6B4F4082D29F6F6BD33F50A",
+    "name": "jean beckers",
+    "pageUrl": "/u/jean-beckers/51338399/",
+    "activeSinceDiff": "1 jaar",
+    "activeYears": 1,
+    "isAsqEnabled": true,
+    "isSaved": false,
+    "phoneNumber": "",
+    "phoneNumberHidden": false,
+    "sellerType": "CONSUMER",
+    "showMap": false,
+    "showSellerReviews": true,
+    "showProfilePicture": false,
+    "showSalesRepresentatives": false,
+    "showSellerResponseRate": true,
+    "showVerifications": true,
+    "showDealerLegalDisclaimer": false,
+    "financeAvailable": false,
+    "requestExternalReviews": false,
+    "allowCarTestDriveRequest": false,
+    "withCallAvailabilityIndicator": false,
+    "location": {
+      "isAbroad": false,
+      "cityName": "Kerkrade",
+      "countryName": "Nederland",
+      "isOnCountryLevel": false,
+      "countryAbbreviation": "NL"
+    },
+    "contactOptions": [
+      "asq"
+    ]
+  },
+  "gallery": {
+    "imageUrls": [
+      "//images.marktplaats.com/api/v1/listing-mp-p/images/92/926fb7a4-7561-4ebc-ac8e-906ee904e58b?rule=ecg_mp_eps$_#.jpg",
+      "//images.marktplaats.com/api/v1/listing-mp-p/images/43/4355a01b-7ddc-4437-867f-441db5222c4c?rule=ecg_mp_eps$_#.jpg",
+      "//images.marktplaats.com/api/v1/listing-mp-p/images/c1/c1c1c1cc-cd81-4a7f-ac35-eadfbbd4a8c0?rule=ecg_mp_eps$_#.jpg",
+      "//images.marktplaats.com/api/v1/listing-mp-p/images/85/859b1211-3a38-4f08-a535-d1a2cc7ad93b?rule=ecg_mp_eps$_#.jpg"
+    ],
+    "media": {
+      "imageSizes": {
+        "XL": "84",
+        "M": "82",
+        "XXXL": "86",
+        "L": "83",
+        "XXL": "85",
+        "XXS": "14",
+        "XS": "14",
+        "S": "82"
+      },
+      "images": [
+        {
+          "mediaId": "444c1a61-cad7-4da2-88cb-55e36bd08924",
+          "base": "//images.marktplaats.com/api/v1/listing-mp-p/images/92/926fb7a4-7561-4ebc-ac8e-906ee904e58b?rule=ecg_mp_eps$_#.jpg",
+          "originalHeight": 1024,
+          "originalWidth": 461,
+          "aspectRatio": {
+            "width": 461,
+            "height": 1024
+          }
+        },
+        {
+          "mediaId": "4b10067d-2391-47ee-8816-49d16a6de015",
+          "base": "//images.marktplaats.com/api/v1/listing-mp-p/images/43/4355a01b-7ddc-4437-867f-441db5222c4c?rule=ecg_mp_eps$_#.jpg",
+          "originalHeight": 1024,
+          "originalWidth": 461,
+          "aspectRatio": {
+            "width": 461,
+            "height": 1024
+          }
+        },
+        {
+          "mediaId": "23895798-e386-4866-8173-1c745e452c40",
+          "base": "//images.marktplaats.com/api/v1/listing-mp-p/images/c1/c1c1c1cc-cd81-4a7f-ac35-eadfbbd4a8c0?rule=ecg_mp_eps$_#.jpg",
+          "originalHeight": 1024,
+          "originalWidth": 461,
+          "aspectRatio": {
+            "width": 461,
+            "height": 1024
+          }
+        },
+        {
+          "mediaId": "043f9966-6b82-43f5-a1b7-0dbd753e4527",
+          "base": "//images.marktplaats.com/api/v1/listing-mp-p/images/85/859b1211-3a38-4f08-a535-d1a2cc7ad93b?rule=ecg_mp_eps$_#.jpg",
+          "originalHeight": 1024,
+          "originalWidth": 461,
+          "aspectRatio": {
+            "width": 461,
+            "height": 1024
+          }
+        }
+      ]
+    },
+    "alt": "boeken en kama sutra encyclopedie, Boeken, Overige Boeken, Zo goed als nieuw, Ophalen of Verzenden"
+  },
+  "shippingInformation": {
+    "augmentedLabels": [
+      {
+        "shouldShowMoreInfo": false,
+        "carrierId": "dhl-nl",
+        "labels": [
+          {
+            "label": "Afhaalpunt voor",
+            "price": "€ 5,55",
+            "carrierName": "DHL",
+            "deliveryMethod": "PICK_UP"
+          },
+          {
+            "label": "of thuis voor",
+            "price": "€ 6,55",
+            "carrierName": "DHL",
+            "deliveryMethod": "DELIVERY"
+          }
+        ]
+      },
+      {
+        "shouldShowMoreInfo": false,
+        "carrierId": "postnl",
+        "labels": [
+          {
+            "label": "Afhaalpunt voor",
+            "price": "€ 6,95",
+            "carrierName": "PostNL",
+            "deliveryMethod": "PICK_UP"
+          },
+          {
+            "label": "of thuis voor",
+            "price": "€ 7,45",
+            "carrierName": "PostNL",
+            "deliveryMethod": "DELIVERY"
+          }
+        ]
+      }
+    ],
+    "deliveryType": {
+      "attributeLabel": "Levering",
+      "attributeValueLabel": "Ophalen of Verzenden",
+      "attributeValueKey": "Ophalen of Verzenden"
+    }
+  },
+  "stats": {
+    "favoritedCount": 2,
+    "viewCount": 412,
+    "since": "2026-02-20T09:58:41Z"
+  },
+  "category": {
+    "id": 221,
+    "name": "Overige Boeken",
+    "fullName": "Overige Boeken",
+    "parentId": 201,
+    "parentName": "Boeken"
+  },
+  "isSaved": false,
+  "isSavingEnabled": true,
+  "isFreeAd": false,
+  "isAnimalAd": false,
+  "isCarAd": false,
+  "isAutomotiveAd": false,
+  "isCaravansAndCampingAd": false,
+  "flags": {
+    "showBannersOnVip": true,
+    "showExternalAds": true,
+    "showSellerOtherItems": true,
+    "requestRelevantItems": true,
+    "isAdmarkt": false,
+    "allowTradeInRequest": false,
+    "shippable": true,
+    "requestFeeds": false,
+    "hasCallTracking": false,
+    "isLeaseCar": false,
+    "showLoanIndicators": false,
+    "withBannersFromSeller": false
+  },
+  "highlights": [],
+  "buyersProtectionAllowed": true,
+  "thinContent": false,
+  "averageCo2Kg": 0.1,
+  "buyItNowEnabled": false,
+  "largeItemShippingLogicalAllowed": false
+}

@@ -1,0 +1,7 @@
+{
+  "thread": 20,
+  "timeout": 15,
+  "max_ms": 20000,
+  "host": "https://httpbin.org/ip",
+  "proxies_file": "proxies.json"
+}
