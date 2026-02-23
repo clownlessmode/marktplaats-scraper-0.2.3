@@ -224,6 +224,38 @@ def test_all_emails(db_path: str, user_id: int | None = None) -> tuple[int, int,
     return ok_count, failed_count, failed_emails
 
 
+def send_bulk_listing_emails(
+    db_path: str,
+    user_id: int,
+    listings: list[dict | object],
+) -> tuple[int, int, list[str]]:
+    """
+    Рассылка по списку товаров. Использует почты и шаблон воркера (round-robin).
+    Возвращает (успешно, ошибок, список recipient при успехе).
+    """
+    ok_count = 0
+    fail_count = 0
+    recipients: list[str] = []
+    for item in listings:
+        if isinstance(item, dict):
+            from types import SimpleNamespace
+            ns = SimpleNamespace(**item)
+        else:
+            ns = item
+        creds = get_next_email_for_listing(db_path, user_id)
+        if not creds:
+            fail_count += 1
+            continue
+        sender_email, sender_password = creds
+        ok, recipient = send_seller_email(db_path, ns, sender_email, sender_password, user_id)
+        if ok and recipient:
+            ok_count += 1
+            recipients.append(recipient)
+        else:
+            fail_count += 1
+    return ok_count, fail_count, recipients
+
+
 def try_send_listing_email(db_path: str, listing: object, worker_id: int | None) -> tuple[bool, str | None]:
     """
     Round-robin по активным почтам воркера. worker_id=None — пропуск (нет воркера на смене).

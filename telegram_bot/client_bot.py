@@ -26,6 +26,7 @@ from .database import (
     add_emails_batch,
     parse_emails_text,
     parse_emails_csv,
+    parse_listings_csv,
     add_template,
     get_templates,
     get_template,
@@ -36,6 +37,7 @@ from .database import (
     format_template_example,
     TEMPLATE_VARS,
 )
+from .email_sender import send_bulk_listing_emails
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -50,6 +52,10 @@ class WorkerEmailsState(StatesGroup):
 class WorkerTemplateState(StatesGroup):
     name = State()
     body = State()
+
+
+class WorkerBulkMailState(StatesGroup):
+    waiting_csv = State()
 
 
 # Очередь для уведомлений админу о новых воркерах (отправляем с кнопками через клиентский бот)
@@ -72,6 +78,7 @@ def _worker_kb(on_shift: bool) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📦 Товары сегодня", callback_data="list_today")],
         [InlineKeyboardButton(text="📧 Почты", callback_data="worker_emails")],
         [InlineKeyboardButton(text="📝 Шаблоны", callback_data="worker_templates")],
+        [InlineKeyboardButton(text="📤 Рассылка", callback_data="worker_bulk_mail")],
     ]
     if on_shift:
         return InlineKeyboardMarkup(inline_keyboard=[
@@ -577,6 +584,83 @@ async def cb_worker_tpl_edit(cb: CallbackQuery, state: FSMContext) -> None:
     )
     await cb.message.answer(f"<pre>{html.escape(body)}</pre>", parse_mode="HTML")
     await cb.answer()
+
+
+# --- Рассылка по CSV ---
+@router.callback_query(F.data == "worker_bulk_mail")
+async def cb_worker_bulk_mail(cb: CallbackQuery, state: FSMContext) -> None:
+    user_id = cb.from_user.id if cb.from_user else 0
+    if is_blocked(DB_PATH, user_id) or not is_authorized(DB_PATH, user_id):
+        await cb.answer()
+        return
+    if get_emails_count(DB_PATH, user_id) == 0:
+        await cb.answer("❌ Сначала добавьте почты в меню «Почты»", show_alert=True)
+        return
+    if get_active_template_id(DB_PATH, user_id) is None:
+        await cb.answer("❌ Сначала выберите активный шаблон в меню «Шаблоны»", show_alert=True)
+        return
+    await state.set_state(WorkerBulkMailState.waiting_csv)
+    await cb.message.edit_text(
+        "📤 <b>Рассылка по CSV</b>\n\n"
+        "Загрузите файл .csv с товарами.\n\n"
+        "<b>Нужные колонки:</b>\n"
+        "• Название товара (или title)\n"
+        "• Ник Продавца (или seller_name)\n"
+        "• Ссылка на товар (или listing_url)\n"
+        "• Цена (опционально)\n"
+        "• Город (опционально)\n\n"
+        "Бот возьмёт имя продавца, соберёт email (ник@gmail.com) и отправит письмо "
+        "по вашему шаблону с ваших почт (round-robin).",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="worker_main")],
+        ]),
+        parse_mode="HTML",
+    )
+    await cb.answer()
+
+
+@router.message(WorkerBulkMailState.waiting_csv, F.document)
+async def msg_worker_bulk_csv(msg: Message, state: FSMContext) -> None:
+    user_id = msg.from_user.id if msg.from_user else 0
+    if is_blocked(DB_PATH, user_id) or not is_authorized(DB_PATH, user_id):
+        return
+    doc = msg.document
+    if not doc or not doc.file_name or not doc.file_name.lower().endswith(".csv"):
+        await msg.answer("❌ Нужен файл .csv")
+        return
+    status_msg = await msg.answer("⏳ Обрабатываю CSV...")
+    try:
+        file = await msg.bot.get_file(doc.file_id)
+        data = await msg.bot.download_file(file.file_path)
+        content = data.read().decode("utf-8", errors="replace")
+        listings = parse_listings_csv(content)
+        if not listings:
+            await status_msg.edit_text(
+                "❌ Не удалось распарсить CSV.\n\n"
+                "Нужны колонки: <b>Ник Продавца</b>, <b>Ссылка на товар</b> (marktplaats).",
+                parse_mode="HTML",
+            )
+            await state.clear()
+            return
+        ok, fail, recipients = send_bulk_listing_emails(DB_PATH, user_id, listings)
+        await state.clear()
+        text = (
+            f"✅ <b>Рассылка завершена</b>\n\n"
+            f"📧 Отправлено: {ok}\n"
+            f"❌ Ошибок: {fail}\n"
+            f"📋 Всего строк: {len(listings)}"
+        )
+        if recipients:
+            text += f"\n\nПервые получатели: {', '.join(recipients[:5])}"
+            if len(recipients) > 5:
+                text += f" ..."
+        await status_msg.edit_text(text, parse_mode="HTML")
+        on_shift = is_shift_active(DB_PATH, user_id)
+        await msg.answer("Главное меню", reply_markup=_worker_kb(on_shift))
+    except Exception as e:
+        logger.exception("Bulk mail: %s", e)
+        await status_msg.edit_text(f"❌ Ошибка: {e}")
+        await state.clear()
 
 
 @router.callback_query(F.data.startswith("worker_tpl_del_"))

@@ -969,6 +969,103 @@ def parse_emails_csv(csv_content: str) -> list[tuple[str, str]]:
     return pairs
 
 
+# Маппинг колонок CSV для рассылки (название -> ключ). Более специфичные первыми.
+LISTINGS_CSV_COL_MAP = {
+    "название товара": "title",
+    "title": "title",
+    "название": "title",
+    "ник продавца": "seller_name",
+    "seller_name": "seller_name",
+    "seller": "seller_name",
+    "продавец": "seller_name",
+    "ссылка на товар": "listing_url",  # именно товар, не продавца
+    "listing_url": "listing_url",
+    "url": "listing_url",
+    "цена": "price",
+    "price": "price",
+    "город": "city_name",
+    "city": "city_name",
+    "city_name": "city_name",
+}
+
+
+def _parse_price_to_cents(s: str) -> int:
+    """€ 60.0 или 60 или 60.00 -> 6000."""
+    if not s:
+        return 0
+    s = str(s).replace("€", "").replace(",", ".").strip()
+    try:
+        return int(float(s) * 100)
+    except (ValueError, TypeError):
+        return 0
+
+
+def _item_id_from_url(url: str) -> str:
+    """Извлечь item_id из marktplaats URL: /m2369188486-... -> m2369188486."""
+    import re
+    if not url or "/m" not in url:
+        return ""
+    match = re.search(r"/m(\d+)(?:-|$|/)", url)
+    return f"m{match.group(1)}" if match else ""
+
+
+def parse_listings_csv(csv_content: str) -> list[dict]:
+    """
+    Парсит CSV с товарами для рассылки.
+    Формат: Название товара, Ник Продавца, Ссылка на товар, Цена, Город...
+    Возвращает список dict с ключами: title, seller_name, listing_url, price_cents, city_name, item_id.
+    """
+    result = []
+    try:
+        content = csv_content.strip()
+        if not content:
+            return result
+        # Пробуем запятую и точку с запятой
+        for delim in (",", ";"):
+            reader = csv.reader(io.StringIO(content))
+            rows = list(reader)
+            if not rows or len(rows) < 2:
+                continue
+            header = [str(h).lower().strip() for h in rows[0]]
+            col_idx: dict[str, int] = {}
+            for i, h in enumerate(header):
+                for key, db_key in LISTINGS_CSV_COL_MAP.items():
+                    if key == h:
+                        col_idx[db_key] = i
+                        break
+                    if key in h and "продавца" not in h and db_key == "listing_url":
+                        continue
+                    if key in h and db_key != "listing_url":
+                        col_idx[db_key] = i
+                        break
+            if "seller_name" not in col_idx or "listing_url" not in col_idx:
+                continue
+            for row in rows[1:]:
+                if len(row) <= max(col_idx.values()):
+                    continue
+                seller = (row[col_idx["seller_name"]] or "").strip() if "seller_name" in col_idx else ""
+                url = (row[col_idx["listing_url"]] or "").strip() if "listing_url" in col_idx else ""
+                if not seller or not url or "marktplaats" not in url.lower():
+                    continue
+                title = (row[col_idx["title"]] or "").strip() if "title" in col_idx else ""
+                price_str = (row[col_idx["price"]] or "").strip() if "price" in col_idx else ""
+                city = (row[col_idx["city_name"]] or "").strip() if "city_name" in col_idx else ""
+                result.append({
+                    "title": title or "Товар",
+                    "seller_name": seller,
+                    "listing_url": url,
+                    "price_cents": _parse_price_to_cents(price_str),
+                    "city_name": city,
+                    "item_id": _item_id_from_url(url),
+                    "category_ru": "",
+                    "description": "",
+                })
+            break
+    except Exception:
+        pass
+    return result
+
+
 def get_last_update_date(db_path: str) -> str | None:
     if not Path(db_path).exists():
         return None

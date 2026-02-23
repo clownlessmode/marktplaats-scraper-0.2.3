@@ -2,6 +2,14 @@
 .ruff_cache/
 listings.csv
 
+# Прокси и БД
+proxies.json
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+data/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
