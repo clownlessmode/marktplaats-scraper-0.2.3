@@ -26,7 +26,7 @@ python-dotenv = "^1.0"
 fake-http-header = "^0.3.5"
 
 [tool.poetry.group.dev.dependencies]
-ruff = "^0.13.2"
+ruff = "^0.15.2"
 pytest = "^8.4.2"
 pytest-cov = "^7.0.0"
 bandit = "^1.8.6"
