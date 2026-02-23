@@ -25,6 +25,7 @@ from .database import (
     get_emails_count,
     add_emails_batch,
     delete_email,
+    unblock_email,
     parse_emails_text,
     parse_emails_csv,
     parse_listings_csv,
@@ -321,8 +322,11 @@ async def msg_worker_emails_add_text(msg: Message, state: FSMContext) -> None:
         await msg.answer("❌ Не найдено валидных строк. Формат: mail@gmail.com:apppassword")
         return
     added, skipped = add_emails_batch(DB_PATH, pairs, user_id)
+    total = get_emails_count(DB_PATH, user_id)
+    active = get_emails_count(DB_PATH, user_id, include_blocked=False)
+    logger.info("Email add (text): user_id=%s | added=%s | skipped=%s | всего=%s | активных=%s", user_id, added, skipped, total, active)
     await state.clear()
-    await msg.answer(f"✅ Добавлено: {added}, пропущено (дубли): {skipped}")
+    await msg.answer(f"✅ Добавлено: {added}, пропущено (дубли): {skipped}\n📋 Всего: {total}, активных: {active}")
     await msg.answer("📧 База почт", reply_markup=_worker_emails_kb(user_id))
 
 
@@ -358,13 +362,19 @@ def _build_emails_list_page(user_id: int, page: int) -> tuple[str, InlineKeyboar
             [InlineKeyboardButton(text="◀️ К меню почт", callback_data="worker_emails")],
         ])
         return text, kb
-    lines = [f"📋 <b>Почты</b> (стр. {page + 1}, всего {total})\n"]
+    active_count = get_emails_count(DB_PATH, user_id, include_blocked=False)
+    blocked_count = total - active_count
+    lines = [f"📋 <b>Почты</b> (стр. {page + 1}, всего {total}, активных: {active_count})\n"]
+    if blocked_count > 0:
+        lines.append("⚠️ Заблокированные (🚫) не используются. Нажмите «Разблокировать».\n")
     btns = []
     for idx, (email, _, _, blocked) in enumerate(rows):
-        lines.append(f"• <code>{email}</code>" + (" 🚫" if blocked else ""))
-        btns.append([
-            InlineKeyboardButton(text=f"🗑 {email[:30]}{'…' if len(email) > 30 else ''}", callback_data=f"worker_email_del_{page}_{idx}"),
-        ])
+        lines.append(f"• <code>{email}</code>" + (" 🚫 заблокирована" if blocked else ""))
+        row_btns = []
+        if blocked:
+            row_btns.append(InlineKeyboardButton(text="✅ Разблокировать", callback_data=f"worker_email_unblock_{page}_{idx}"))
+        row_btns.append(InlineKeyboardButton(text=f"🗑 Удалить", callback_data=f"worker_email_del_{page}_{idx}"))
+        btns.append(row_btns)
     nav = []
     if page > 0:
         nav.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"worker_emails_list_{page - 1}"))
@@ -425,6 +435,36 @@ async def cb_worker_email_delete(cb: CallbackQuery) -> None:
         await cb.answer("Не удалось удалить", show_alert=True)
 
 
+@router.callback_query(F.data.startswith("worker_email_unblock_"))
+async def cb_worker_email_unblock(cb: CallbackQuery) -> None:
+    """Разблокировать почту воркера."""
+    user_id = cb.from_user.id if cb.from_user else 0
+    if is_blocked(DB_PATH, user_id) or not is_authorized(DB_PATH, user_id):
+        await cb.answer()
+        return
+    try:
+        parts = cb.data.replace("worker_email_unblock_", "").split("_")
+        page = int(parts[0])
+        idx = int(parts[1])
+    except (ValueError, IndexError):
+        await cb.answer("Ошибка", show_alert=True)
+        return
+    per_page = 15
+    offset = page * per_page
+    rows = get_emails(DB_PATH, user_id, limit=per_page, offset=offset)
+    if idx < 0 or idx >= len(rows):
+        await cb.answer("Почта не найдена", show_alert=True)
+        return
+    email = rows[idx][0]
+    if unblock_email(DB_PATH, email, user_id):
+        logger.info("Email unblock: user_id=%s | email=%s", user_id, email)
+        await cb.answer(f"✅ {email} разблокирована")
+        text, kb = _build_emails_list_page(user_id, page)
+        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    else:
+        await cb.answer("Не удалось разблокировать", show_alert=True)
+
+
 @router.message(WorkerBulkMailState.waiting_csv, F.document)
 async def msg_worker_bulk_csv(msg: Message, state: FSMContext) -> None:
     """CSV для рассылки — обрабатывается первым, когда воркер в режиме рассылки."""
@@ -451,6 +491,7 @@ async def msg_worker_bulk_csv(msg: Message, state: FSMContext) -> None:
             return
         await status_msg.edit_text(f"⏳ Отправляю письма ({len(listings)} шт.)... Не закрывайте бота.")
         loop = asyncio.get_event_loop()
+        active_before = get_emails_count(DB_PATH, user_id, include_blocked=False)
         ok, fail, recipients = await loop.run_in_executor(
             None, lambda: send_bulk_listing_emails(DB_PATH, user_id, listings)
         )
@@ -461,6 +502,8 @@ async def msg_worker_bulk_csv(msg: Message, state: FSMContext) -> None:
             f"❌ Ошибок: {fail}\n"
             f"📋 Всего строк: {len(listings)}"
         )
+        if fail == len(listings) and active_before == 0:
+            text += "\n\n⚠️ <b>Нет активных почт</b> — добавьте почты и нажмите «Разблокировать» на заблокированных (🚫)."
         if recipients:
             text += f"\n\nПервые получатели: {', '.join(recipients[:5])}"
             if len(recipients) > 5:
@@ -495,8 +538,11 @@ async def msg_worker_emails_csv(msg: Message, state: FSMContext) -> None:
             await msg.answer("❌ В CSV не найдено email. Колонки: email, apppassword (только Gmail)")
             return
         added, skipped = add_emails_batch(DB_PATH, pairs, user_id)
+        total = get_emails_count(DB_PATH, user_id)
+        active = get_emails_count(DB_PATH, user_id, include_blocked=False)
+        logger.info("Email add (CSV): user_id=%s | added=%s | skipped=%s | всего=%s | активных=%s", user_id, added, skipped, total, active)
         await state.clear()
-        await msg.answer(f"✅ Из CSV добавлено: {added}, пропущено (дубли): {skipped}")
+        await msg.answer(f"✅ Из CSV добавлено: {added}, пропущено (дубли): {skipped}\n📋 Всего: {total}, активных: {active}")
         await msg.answer("📧 База почт", reply_markup=_worker_emails_kb(user_id))
     except Exception as e:
         await msg.answer(f"❌ Ошибка: {e}")

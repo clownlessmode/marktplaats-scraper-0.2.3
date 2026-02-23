@@ -19,6 +19,7 @@ from .database import (
     get_template,
     get_next_email_for_listing,
     get_all_emails,
+    get_emails_count,
     mark_email_blocked,
     unblock_email,
     set_last_used_email,
@@ -318,7 +319,12 @@ def send_bulk_listing_emails(
     ok_count = 0
     fail_count = 0
     recipients: list[str] = []
-    logger.info("SMTP bulk: старт рассылки | user_id=%s | строк=%s", user_id, len(listings))
+    total_emails = get_emails_count(db_path, user_id, include_blocked=True)
+    active_emails = get_emails_count(db_path, user_id, include_blocked=False)
+    logger.info(
+        "SMTP bulk: старт | user_id=%s | строк=%s | почт всего=%s | активных=%s (заблокированных=%s)",
+        user_id, len(listings), total_emails, active_emails, total_emails - active_emails,
+    )
     for i, item in enumerate(listings):
         if isinstance(item, dict):
             from types import SimpleNamespace
