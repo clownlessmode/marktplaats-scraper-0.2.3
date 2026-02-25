@@ -971,29 +971,53 @@ def parse_emails_csv(csv_content: str) -> list[tuple[str, str]]:
 
 # Маппинг колонок CSV для рассылки (название -> ключ). Более специфичные первыми.
 LISTINGS_CSV_COL_MAP = {
+    # title
     "название товара": "title",
-    "title": "title",
     "название": "title",
+    "title": "title",
+    # seller_name
     "ник продавца": "seller_name",
+    "имя продавца": "seller_name",
+    "имя": "seller_name",
     "seller_name": "seller_name",
     "seller": "seller_name",
     "продавец": "seller_name",
-    "ссылка на товар": "listing_url",  # именно товар, не продавца
+    "shop_name": "seller_name",
+    # listing_url
+    "ссылка на товар": "listing_url",
+    "ссылка на объявление": "listing_url",
     "listing_url": "listing_url",
     "url": "listing_url",
+    # price
     "цена": "price",
     "price": "price",
+    "price_label": "price",
+    # city
     "город": "city_name",
+    "локация": "city_name",
+    "местоположение": "city_name",
+    "location_label": "city_name",
     "city": "city_name",
     "city_name": "city_name",
+    # description
+    "описание": "description",
+    "description": "description",
 }
 
 
 def _parse_price_to_cents(s: str) -> int:
-    """€ 60.0 или 60 или 60.00 -> 6000."""
+    """€ 60.0 / € 1.999,99 / € 60,00 / Bieden / Gratis -> центы."""
     if not s:
         return 0
-    s = str(s).replace("€", "").replace(",", ".").strip()
+    s = str(s).strip()
+    if s.lower() in ("bieden", "gratis", "zie omschrijving", "-"):
+        return 0
+    s = s.replace("€", "").replace("\u00a0", "").strip()
+    # Формат с точкой как разделитель тысяч и запятой как десятичной: 1.999,99
+    if "." in s and "," in s:
+        s = s.replace(".", "").replace(",", ".")
+    elif "," in s:
+        s = s.replace(",", ".")
     try:
         return int(float(s) * 100)
     except (ValueError, TypeError):
@@ -1009,47 +1033,68 @@ def _item_id_from_url(url: str) -> str:
     return f"m{match.group(1)}" if match else ""
 
 
+_LISTING_URL_DOMAINS = ("marktplaats", "2dehands")
+
+# Колонки, которые НЕ являются ссылкой на товар (чтобы «ссылка на продавца» не попала в listing_url)
+_LISTING_URL_BLACKLIST = ("продавца", "магазин", "фото", "seller_url", "photo")
+
+
+def _match_columns(header: list[str]) -> dict[str, int]:
+    """Сопоставить колонки CSV → внутренние ключи. Точное совпадение приоритетнее частичного."""
+    col_idx: dict[str, int] = {}
+    # Первый проход — точное совпадение
+    for i, h in enumerate(header):
+        for key, db_key in LISTINGS_CSV_COL_MAP.items():
+            if key == h and db_key not in col_idx:
+                col_idx[db_key] = i
+                break
+    # Второй проход — частичное (key in h), но не перезаписываем точные
+    for i, h in enumerate(header):
+        for key, db_key in LISTINGS_CSV_COL_MAP.items():
+            if db_key in col_idx:
+                continue
+            if key in h:
+                if db_key == "listing_url" and any(bl in h for bl in _LISTING_URL_BLACKLIST):
+                    continue
+                col_idx[db_key] = i
+    return col_idx
+
+
 def parse_listings_csv(csv_content: str) -> list[dict]:
     """
-    Парсит CSV с товарами для рассылки.
-    Формат: Название товара, Ник Продавца, Ссылка на товар, Цена, Город...
-    Возвращает список dict с ключами: title, seller_name, listing_url, price_cents, city_name, item_id.
+    Парсит CSV с товарами для рассылки. Поддерживает разные форматы колонок
+    (marktplaats, 2dehands, русские/английские заголовки).
+    Возвращает список dict с ключами: title, seller_name, listing_url, price_cents, city_name, item_id, description.
     """
     result = []
     try:
         content = csv_content.strip()
         if not content:
             return result
-        # Пробуем запятую и точку с запятой
         for delim in (",", ";"):
-            reader = csv.reader(io.StringIO(content))
+            reader = csv.reader(io.StringIO(content), delimiter=delim)
             rows = list(reader)
             if not rows or len(rows) < 2:
                 continue
-            header = [str(h).lower().strip() for h in rows[0]]
-            col_idx: dict[str, int] = {}
-            for i, h in enumerate(header):
-                for key, db_key in LISTINGS_CSV_COL_MAP.items():
-                    if key == h:
-                        col_idx[db_key] = i
-                        break
-                    if key in h and "продавца" not in h and db_key == "listing_url":
-                        continue
-                    if key in h and db_key != "listing_url":
-                        col_idx[db_key] = i
-                        break
+            header = [str(h).lower().strip().lstrip("\ufeff") for h in rows[0]]
+            col_idx = _match_columns(header)
             if "seller_name" not in col_idx or "listing_url" not in col_idx:
                 continue
+            max_idx = max(col_idx.values())
             for row in rows[1:]:
-                if len(row) <= max(col_idx.values()):
+                if len(row) <= max_idx:
                     continue
-                seller = (row[col_idx["seller_name"]] or "").strip() if "seller_name" in col_idx else ""
-                url = (row[col_idx["listing_url"]] or "").strip() if "listing_url" in col_idx else ""
-                if not seller or not url or "marktplaats" not in url.lower():
+                seller = (row[col_idx["seller_name"]] or "").strip()
+                url = (row[col_idx["listing_url"]] or "").strip()
+                if not seller or not url:
+                    continue
+                url_lower = url.lower()
+                if not any(d in url_lower for d in _LISTING_URL_DOMAINS):
                     continue
                 title = (row[col_idx["title"]] or "").strip() if "title" in col_idx else ""
                 price_str = (row[col_idx["price"]] or "").strip() if "price" in col_idx else ""
                 city = (row[col_idx["city_name"]] or "").strip() if "city_name" in col_idx else ""
+                desc = (row[col_idx["description"]] or "").strip() if "description" in col_idx else ""
                 result.append({
                     "title": title or "Товар",
                     "seller_name": seller,
@@ -1058,7 +1103,7 @@ def parse_listings_csv(csv_content: str) -> list[dict]:
                     "city_name": city,
                     "item_id": _item_id_from_url(url),
                     "category_ru": "",
-                    "description": "",
+                    "description": desc,
                 })
             break
     except Exception:
