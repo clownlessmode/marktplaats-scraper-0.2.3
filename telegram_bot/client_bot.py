@@ -506,26 +506,26 @@ async def msg_worker_bulk_csv(msg: Message, state: FSMContext) -> None:
             )
             await state.clear()
             return
+        data = await state.get_data()
+        delay_sec = int(data.get("bulk_delay_seconds", 0))
         await status_msg.edit_text(f"⏳ Отправляю письма ({len(listings)} шт.)... Не закрывайте бота.")
         loop = asyncio.get_event_loop()
-        ok, fail, recipients = await loop.run_in_executor(
-            None, lambda: send_bulk_listing_emails(DB_PATH, user_id, listings)
+        ok, fail, not_exists, recipients = await loop.run_in_executor(
+            None, lambda: send_bulk_listing_emails(DB_PATH, user_id, listings, delay_seconds=delay_sec)
         )
         await state.clear()
         text = (
             f"✅ <b>Рассылка завершена</b>\n\n"
             f"📧 Отправлено: {ok}\n"
             f"❌ Ошибок: {fail}\n"
-            f"📋 Всего строк: {len(listings)}"
         )
-        if fail == len(listings):
+        if not_exists > 0:
+            text += f"👻 Почта не существует: {not_exists}\n"
+        text += f"📋 Всего строк: {len(listings)}"
+        if fail + not_exists == len(listings) and ok == 0:
             active_after = get_emails_count(DB_PATH, user_id, include_blocked=False)
             if active_after == 0 and active_before > 0:
                 text += "\n\n⚠️ <b>Почты заблокированы</b> после ошибок SMTP. Нажмите «Разблокировать» в списке почт."
-            elif active_before == 0:
-                text += "\n\n⚠️ <b>Нет активных почт</b> — добавьте почты и нажмите «Разблокировать» на заблокированных (🚫)."
-            elif not template_id:
-                text += "\n\n⚠️ <b>Нет активного шаблона</b> — выберите шаблон в меню «Шаблоны»."
         if recipients:
             text += f"\n\nПервые получатели: {', '.join(recipients[:5])}"
             if len(recipients) > 5:
@@ -745,6 +745,15 @@ async def cb_worker_tpl_edit(cb: CallbackQuery, state: FSMContext) -> None:
 
 
 # --- Рассылка по CSV ---
+BULK_DELAY_OPTIONS = [
+    (0, "Без задержки"),
+    (60, "1 мин"),
+    (180, "3 мин"),
+    (300, "5 мин"),
+    (600, "10 мин"),
+]
+
+
 @router.callback_query(F.data == "worker_bulk_mail")
 async def cb_worker_bulk_mail(cb: CallbackQuery, state: FSMContext) -> None:
     user_id = cb.from_user.id if cb.from_user else 0
@@ -757,9 +766,35 @@ async def cb_worker_bulk_mail(cb: CallbackQuery, state: FSMContext) -> None:
     if get_active_template_id(DB_PATH, user_id) is None:
         await cb.answer("❌ Сначала выберите активный шаблон в меню «Шаблоны»", show_alert=True)
         return
-    await state.set_state(WorkerBulkMailState.waiting_csv)
+    btns = []
+    for sec, label in BULK_DELAY_OPTIONS:
+        btns.append([InlineKeyboardButton(text=label, callback_data=f"worker_bulk_delay_{sec}")])
+    btns.append([InlineKeyboardButton(text="❌ Отмена", callback_data="worker_main")])
     await cb.message.edit_text(
         "📤 <b>Рассылка по CSV</b>\n\n"
+        "Выберите задержку между письмами:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=btns),
+        parse_mode="HTML",
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("worker_bulk_delay_"))
+async def cb_worker_bulk_delay(cb: CallbackQuery, state: FSMContext) -> None:
+    user_id = cb.from_user.id if cb.from_user else 0
+    if is_blocked(DB_PATH, user_id) or not is_authorized(DB_PATH, user_id):
+        await cb.answer()
+        return
+    try:
+        delay_sec = int(cb.data.replace("worker_bulk_delay_", ""))
+    except ValueError:
+        await cb.answer()
+        return
+    await state.update_data(bulk_delay_seconds=delay_sec)
+    await state.set_state(WorkerBulkMailState.waiting_csv)
+    label = next((l for s, l in BULK_DELAY_OPTIONS if s == delay_sec), "Без задержки")
+    await cb.message.edit_text(
+        f"📤 <b>Рассылка по CSV</b> · задержка: <b>{label}</b>\n\n"
         "Загрузите файл .csv с товарами (marktplaats / 2dehands).\n\n"
         "Бот автоматически определит формат. Нужны колонки:\n"
         "• <b>Имя продавца</b> (Ник Продавца / Имя / seller_name)\n"

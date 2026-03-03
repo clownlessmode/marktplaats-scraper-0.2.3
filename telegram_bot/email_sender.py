@@ -1,13 +1,13 @@
 """Отправка писем продавцам через Gmail SMTP.
 Формат почт: mail:apppassword (только Gmail).
 App Password: https://myaccount.google.com/apppasswords
-Поддержка SOCKS5 прокси (proxies.json) для обхода блокировки SMTP на VDS.
 """
 import json
 import logging
 import os
 import re
 import smtplib
+import socket
 import traceback
 from email.mime.text import MIMEText
 from email.utils import formataddr
@@ -36,6 +36,72 @@ DEV_TEST_RECIPIENT = "eclipselucky@gmail.com"
 def _create_smtp_connection(host: str = "smtp.gmail.com", port: int = 587):
     """Создать прямое SMTP соединение."""
     return smtplib.SMTP(host, port)
+
+
+# ---- Проверка существования email через SMTP RCPT TO ----
+
+_email_check_cache: dict[str, str] = {}
+
+
+def _get_mx_host(domain: str) -> str | None:
+    """MX-запись для домена. Требует dnspython."""
+    try:
+        import dns.resolver
+        mx_records = dns.resolver.resolve(domain, "MX")
+        best = sorted(mx_records, key=lambda x: x.preference)[0]
+        return str(best.exchange).rstrip(".")
+    except Exception:
+        return None
+
+
+def check_email_exists(email: str) -> str:
+    """
+    Проверить существование email через SMTP RCPT TO (без отправки письма).
+    Возвращает: "EXISTS", "NOT_EXISTS", "UNKNOWN".
+    Результат кэшируется в памяти.
+    """
+    email = (email or "").strip().lower()
+    if not email or "@" not in email:
+        return "NOT_EXISTS"
+
+    if email in _email_check_cache:
+        return _email_check_cache[email]
+
+    domain = email.split("@", 1)[1]
+    mx_host = _get_mx_host(domain)
+    if not mx_host:
+        logger.debug("Email check: нет MX для %s", domain)
+        _email_check_cache[email] = "UNKNOWN"
+        return "UNKNOWN"
+
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(10)
+        sock.connect((mx_host, 25))
+        sock.recv(1024)
+        sock.send(b"EHLO checker.local\r\n")
+        sock.recv(1024)
+        sock.send(b"MAIL FROM:<check@verify-test.com>\r\n")
+        sock.recv(1024)
+        sock.send(f"RCPT TO:<{email}>\r\n".encode())
+        resp = sock.recv(1024).decode(errors="replace")
+        sock.send(b"QUIT\r\n")
+        sock.close()
+
+        if any(c in resp for c in ("250", "251")):
+            result = "EXISTS"
+        elif any(c in resp for c in ("550", "551", "553", "554")):
+            result = "NOT_EXISTS"
+        else:
+            result = "UNKNOWN"
+
+        logger.debug("Email check: %s → %s (mx=%s, resp=%s)", email, result, mx_host, resp.strip()[:80])
+        _email_check_cache[email] = result
+        return result
+    except Exception as e:
+        logger.debug("Email check: %s → UNKNOWN (%s)", email, e)
+        _email_check_cache[email] = "UNKNOWN"
+        return "UNKNOWN"
 
 
 def _sanitize_seller_email_local(seller_name: str) -> str:
@@ -80,6 +146,9 @@ def _notify_admin_email_blocked(db_path: str, email: str, error: str) -> None:
         logger.warning("Не удалось уведомить админа о блоке почты: %s", e)
 
 
+_SEND_RESULT_NOT_EXISTS = "NOT_EXISTS"
+
+
 def send_seller_email(
     db_path: str,
     listing: object,
@@ -91,7 +160,8 @@ def send_seller_email(
     Отправить письмо продавцу. user_id — воркер, чьи почта и шаблон используются.
     listing — объект с атрибутами: title, price_cents, listing_url, seller_name, city_name,
     category_verticals/category_ru, description, item_id.
-    Возвращает True при успехе, False при ошибке (почта будет помечена blocked).
+    Возвращает (True, recipient) при успехе, (False, None) при ошибке,
+    (False, "NOT_EXISTS") если почта получателя не существует.
     """
     seller_name = getattr(listing, "seller_name", None) or ""
     recipient_real = _build_seller_email(seller_name)
@@ -100,6 +170,13 @@ def send_seller_email(
         logger.info("Email (dev): отправка на %s (реальный получатель: %s)", recipient, recipient_real)
     else:
         recipient = recipient_real
+
+    # Проверяем существование email получателя перед отправкой
+    if ENVIRONMENT != "dev":
+        email_status = check_email_exists(recipient)
+        if email_status == "NOT_EXISTS":
+            logger.info("SMTP: email не существует, пропуск | to=%s | seller=%s", recipient, seller_name[:30])
+            return False, _SEND_RESULT_NOT_EXISTS
 
     subject = f"Вопрос по объявлению «{getattr(listing, 'title', '')[:50]}»"
     if not sender_email or not sender_password:
@@ -270,28 +347,32 @@ def send_bulk_listing_emails(
     db_path: str,
     user_id: int,
     listings: list[dict | object],
-) -> tuple[int, int, list[str]]:
+    delay_seconds: int = 0,
+) -> tuple[int, int, int, list[str]]:
     """
     Рассылка по списку товаров. Использует почты и шаблон воркера (round-robin).
-    Возвращает (успешно, ошибок, список recipient при успехе).
+    delay_seconds — пауза между письмами (0 = без задержки).
+    Возвращает (успешно, ошибок, не_существует, список recipient при успехе).
     """
+    import time
     ok_count = 0
     fail_count = 0
+    not_exists_count = 0
     recipients: list[str] = []
     db_abs = str(Path(db_path).resolve())
     total_emails = get_emails_count(db_path, user_id, include_blocked=True)
     active_emails = get_emails_count(db_path, user_id, include_blocked=False)
     template_id = get_active_template_id(db_path, user_id)
     logger.info(
-        "SMTP bulk: старт | user_id=%s | db=%s | строк=%s | почт всего=%s | активных=%s | шаблон=%s",
-        user_id, db_abs, len(listings), total_emails, active_emails, "есть" if template_id else "НЕТ",
+        "SMTP bulk: старт | user_id=%s | db=%s | строк=%s | задержка=%s с | почт всего=%s | активных=%s | шаблон=%s",
+        user_id, db_abs, len(listings), delay_seconds, total_emails, active_emails, "есть" if template_id else "НЕТ",
     )
     if active_emails == 0:
         logger.warning("SMTP bulk: нет активных почт у user_id=%s, пропуск всей рассылки", user_id)
-        return 0, len(listings), []
+        return 0, len(listings), 0, []
     if not template_id:
         logger.warning("SMTP bulk: нет активного шаблона у user_id=%s, пропуск всей рассылки", user_id)
-        return 0, len(listings), []
+        return 0, len(listings), 0, []
     for i, item in enumerate(listings):
         if isinstance(item, dict):
             from types import SimpleNamespace
@@ -312,13 +393,17 @@ def send_bulk_listing_emails(
         if ok and recipient:
             ok_count += 1
             recipients.append(recipient)
+        elif recipient == _SEND_RESULT_NOT_EXISTS:
+            not_exists_count += 1
         else:
             fail_count += 1
+        if delay_seconds > 0 and i < len(listings) - 1:
+            time.sleep(delay_seconds)
     logger.info(
-        "SMTP bulk: завершено | user_id=%s | ok=%s | fail=%s | всего=%s",
-        user_id, ok_count, fail_count, len(listings),
+        "SMTP bulk: завершено | user_id=%s | ok=%s | fail=%s | not_exists=%s | всего=%s",
+        user_id, ok_count, fail_count, not_exists_count, len(listings),
     )
-    return ok_count, fail_count, recipients
+    return ok_count, fail_count, not_exists_count, recipients
 
 
 def try_send_listing_email(db_path: str, listing: object, worker_id: int | None) -> tuple[bool, str | None]:

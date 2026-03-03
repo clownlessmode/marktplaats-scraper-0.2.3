@@ -43,7 +43,7 @@ from bs4 import BeautifulSoup
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from telegram_bot.database import init_db, get_conn, get_workers_on_shift
 from telegram_bot.telegram_sender import send_listing_to_next_worker, send_round_summary
-from telegram_bot.email_sender import try_send_listing_email
+from telegram_bot.email_sender import try_send_listing_email, _SEND_RESULT_NOT_EXISTS
 from telegram_bot.config import TELEGRAM_CHAT_ID, ENVIRONMENT, DB_PATH
 
 MARTKPLAATS_BASE_URL = "https://marktplaats.nl"
@@ -592,6 +592,8 @@ async def _worker_category(
                         print(f"      📧 Email: OK → {recipient} «{title[:40]}»", flush=True)
                     elif email_ok:
                         print(f"      📧 Email: OK «{title[:40]}»", flush=True)
+                    elif recipient == _SEND_RESULT_NOT_EXISTS:
+                        print(f"      👻 Email: не существует «{title[:40]}»", flush=True)
                     elif worker_id and not email_ok:
                         print(f"      📧 Email: ошибка/пропуск «{title[:40]}» (см. логи)", flush=True)
                 except Exception as ex:
