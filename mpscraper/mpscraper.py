@@ -115,6 +115,7 @@ class MpScraper:
             "skip_cookies": skip_cookies,
             "proxy": proxy,
             "block_css": block_css,
+            "timeout_seconds": timeout_seconds,
         }
         self.__driver: MPDriver = MPDriver(**self.__driver_params)
 

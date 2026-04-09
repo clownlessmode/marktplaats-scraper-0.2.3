@@ -398,6 +398,7 @@ def _run_track_clicks(args) -> None:
         chromedriver_path=args.chromedriver_path,
         track_clicks=True,
         proxy=args.proxies[0] if args.proxies else None,
+        timeout_seconds=args.timeout_seconds,
     )
     driver.quit()
 

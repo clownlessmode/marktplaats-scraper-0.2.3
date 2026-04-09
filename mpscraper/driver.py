@@ -137,6 +137,13 @@ def _create_driver(
     return driver
 
 
+def _page_load_timeout_seconds(proxy: bool, timeout_seconds: float) -> float:
+    """Таймаут загрузки страницы: без прокси — 20 с; с прокси — от 15 до 30 с (по общему timeout скрапера)."""
+    if not proxy:
+        return 20.0
+    return max(15.0, min(float(timeout_seconds), 30.0))
+
+
 class MPDriver:
     def __init__(
         self,
@@ -148,6 +155,7 @@ class MPDriver:
         track_clicks: bool = False,
         proxy: str | None = None,
         block_css: bool = False,
+        timeout_seconds: float = 15.0,
     ) -> None:
         chrome_options = ChromeOptions()
         chrome_options.add_argument("--ignore-certificate-errors")
@@ -198,7 +206,7 @@ class MPDriver:
         self.__skip_cookies = skip_cookies
         self.__track_clicks = track_clicks
         self.__proxy = proxy
-        self.set_page_load_timeout(5 if proxy else 20)
+        self.set_page_load_timeout(_page_load_timeout_seconds(bool(proxy), timeout_seconds))
         self.__accept_cookies(url=base_url)
 
     def __accept_cookies(self, url: str) -> None:
