@@ -1,7 +1,7 @@
 {
   "thread": 20,
-  "timeout": 30,
-  "max_ms": 20000,
-  "host": "https://httpbin.org/ip",
+  "timeout": 5,
+  "max_ms": 3000,
+  "host": "https://www.marktplaats.nl/",
   "proxies_file": "proxies.json"
 }

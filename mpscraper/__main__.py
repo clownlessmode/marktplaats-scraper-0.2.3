@@ -398,7 +398,6 @@ def _run_track_clicks(args) -> None:
         chromedriver_path=args.chromedriver_path,
         track_clicks=True,
         proxy=args.proxies[0] if args.proxies else None,
-        timeout_seconds=args.timeout_seconds,
     )
     driver.quit()
 
@@ -510,7 +509,7 @@ def main():
                 continue
             raise
         except ProxyError as exc:
-            logging.info("Прокси не работает → смена")
+            logging.info("Прокси не работает → смена: %s", exc.msg or str(exc))
             if mp_scraper:
                 try:
                     mp_scraper.close()
@@ -522,7 +521,7 @@ def main():
             if proxy:
                 msg = str(exc) + getattr(exc, "msg", "") or ""
                 if any(p in msg.lower() for p in ("proxy", "err_proxy", "err_tunnel", "err_connection", "timeout", "connect")):
-                    logging.info("Прокси не работает → смена")
+                    logging.info("Прокси не работает → смена: %s", msg[:300])
                     if mp_scraper:
                         try:
                             mp_scraper.close()
@@ -726,7 +725,7 @@ def main():
                             listings = exc.listings
                             stop = True
                         except ProxyError as exc:
-                            logging.info("Прокси не работает → смена")
+                            logging.info("Прокси не работает → смена: %s", exc.msg or str(exc))
                             raise
                         except ForbiddenError as fe:
                             if proxy:
@@ -752,13 +751,14 @@ def main():
 
                 listings_df = save_state["df"]
                 break  # успех
-            except ProxyError:
+            except ProxyError as exc:
+                logging.info("Прокси не работает → смена: %s", exc.msg or str(exc))
                 continue
             except (WebDriverException, TimeoutException) as exc:
                 if proxy and mp_scraper is None:
                     msg = str(exc) + getattr(exc, "msg", "") or ""
                     if any(p in msg for p in ("proxy", "ERR_PROXY", "ERR_TUNNEL", "ERR_CONNECTION", "connect")):
-                        logging.info("Прокси не работает → смена")
+                        logging.info("Прокси не работает → смена: %s", msg[:300])
                         if mp_scraper:
                             try:
                                 mp_scraper.close()

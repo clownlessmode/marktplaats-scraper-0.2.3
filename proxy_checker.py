@@ -2,17 +2,25 @@
 """
 Проверка прокси перед запуском скрапера.
 Читает proxies.json, проверяет каждый через requests, перезаписывает только рабочие.
+
+Это не гарантирует успех в Chrome/Selenium: браузер грузит страницу иначе (дольше).
+Скрапер выставляет отдельный таймаут первой загрузки страницы при прокси (см. MPDriver).
 """
 import json
 import sys
 import time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import quote
 
 try:
     import requests
 except ModuleNotFoundError:
-    print("Error: install requests: pip install requests")
+    exe = sys.executable
+    print("Нет пакета requests для ЭТОГО интерпретатора:", exe, sep="\n  ")
+    print("Установка в то же окружение:")
+    print(f"  {exe} -m pip install requests")
+    print("(Если (venv) активен, а ошибка остаётся — `python3` указывает не на venv; используйте ./venv/bin/python3)")
     sys.exit(1)
 
 CONFIG_FILE = "proxy_checker_config.json"
@@ -55,6 +63,28 @@ HEADERS = {
 }
 
 
+def to_requests_proxy_url(proxy: str) -> str:
+    """
+    URL для requests.proxies.
+    Поддержка: http(s)://..., socks5://..., host:port:user:pass, host:port.
+    Нельзя делать http:// + целиком host:port:user:pass — urllib3 не парсит.
+    """
+    s = proxy.strip()
+    if not s:
+        return s
+    if "://" in s:
+        return s
+    parts = s.split(":", 3)
+    if len(parts) == 4:
+        host, port, user, password = parts
+        u = quote(user, safe="")
+        p = quote(password, safe="")
+        return f"http://{u}:{p}@{host}:{port}"
+    if len(parts) == 2:
+        return f"http://{parts[0]}:{parts[1]}"
+    return f"http://{s}"
+
+
 def check_proxy(proxy: str, config: dict) -> tuple[str, bool, str]:
     """
     Проверить один прокси. Возвращает (proxy, ok, info).
@@ -63,7 +93,7 @@ def check_proxy(proxy: str, config: dict) -> tuple[str, bool, str]:
     proxy = proxy.strip()
     if not proxy:
         return (proxy, False, "empty")
-    proxy_url = f"http://{proxy}" if "://" not in proxy else proxy
+    proxy_url = to_requests_proxy_url(proxy)
     proxies = {"https": proxy_url, "http": proxy_url}
     try:
         start = time.perf_counter()
