@@ -148,7 +148,6 @@ class MPDriver:
         track_clicks: bool = False,
         proxy: str | None = None,
         block_css: bool = False,
-        page_load_timeout_seconds: float | None = None,
     ) -> None:
         chrome_options = ChromeOptions()
         chrome_options.add_argument("--ignore-certificate-errors")
@@ -158,12 +157,6 @@ class MPDriver:
         chrome_options.add_argument("--disable-setuid-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.page_load_strategy = "eager"  # DOMContentLoaded, не ждём полной загрузки
-        # Не тянуть картинки: быстрее первый рендер и меньше трафика через прокси
-        chrome_options.add_argument("--blink-settings=imagesEnabled=false")
-        chrome_options.add_experimental_option(
-            "prefs",
-            {"profile.default_content_setting_values": {"images": 2}},
-        )
 
         fake_header = FakeHttpHeader(domain_code="nl")
         headers_dict = fake_header.as_header_dict()
@@ -186,57 +179,27 @@ class MPDriver:
             except Exception as e:
                 logging.warning("Не удалось установить заголовки CDP: %s", e)
 
-        if hasattr(self._driver, "execute_cdp_cmd"):
-            blocked_urls = [
-                "*.png",
-                "*.jpg",
-                "*.jpeg",
-                "*.gif",
-                "*.webp",
-                "*.svg",
-                "*.ico",
-                "*.avif",
-                "*.bmp",
-            ]
-            if block_css:
-                blocked_urls.extend(["*.css", "*stylesheet*", "*styles*.css*"])
+        if block_css and hasattr(self._driver, "execute_cdp_cmd"):
             try:
                 self._driver.execute_cdp_cmd("Network.enable", {})
-                self._driver.execute_cdp_cmd("Network.setBlockedURLs", {"urls": blocked_urls})
-                if block_css:
-                    logging.info("Блокировка изображений и CSS (CDP)")
-                else:
-                    logging.debug("Блокировка изображений (CDP)")
+                self._driver.execute_cdp_cmd(
+                    "Network.setBlockedURLs",
+                    {"urls": ["*.css", "*stylesheet*", "*styles*.css*"]},
+                )
+                logging.info("Блокировка CSS включена")
             except Exception as e:
-                logging.warning("Не удалось заблокировать ресурсы (CDP): %s", e)
+                logging.warning("Не удалось заблокировать CSS (CDP): %s", e)
 
-        # делегируем к _driver (page_source/current_url/title — см. property ниже, иначе снимок до get())
-        for attr in ("get", "find_elements", "find_element", "quit", "refresh",
-                     "execute_script", "switch_to", "set_page_load_timeout"):
+        # делегируем к _driver
+        for attr in ("get", "page_source", "find_elements", "find_element", "quit", "refresh",
+                     "execute_script", "switch_to", "current_url", "set_page_load_timeout"):
             setattr(self, attr, getattr(self._driver, attr))
 
         self.__skip_cookies = skip_cookies
         self.__track_clicks = track_clicks
         self.__proxy = proxy
-        # Раньше было 5 с при прокси — requests успевал за 10–15 с, Selenium падал по таймауту.
-        if page_load_timeout_seconds is not None:
-            plt = float(page_load_timeout_seconds)
-        else:
-            plt = 45.0 if proxy else 20.0
-        self.set_page_load_timeout(plt)
+        self.set_page_load_timeout(5 if proxy else 20)
         self.__accept_cookies(url=base_url)
-
-    @property
-    def page_source(self) -> str:
-        return self._driver.page_source
-
-    @property
-    def current_url(self) -> str:
-        return self._driver.current_url
-
-    @property
-    def title(self) -> str:
-        return self._driver.title
 
     def __accept_cookies(self, url: str) -> None:
         """Accept or dismiss the cookies banner."""
@@ -266,38 +229,13 @@ class MPDriver:
 
     def _validate_proxy_page(self) -> None:
         """Проверить, что страница загрузилась (не прокси-ошибка)."""
-        # SPA/лоадер: слово «marktplaats» может появиться в title/host позже, чем в сыром HTML.
-        deadline = time.time() + 55.0
-
-        def _js_hostname() -> str:
+        src = (self.page_source or "").lower()
+        if "marktplaats" not in src:
             try:
-                return self.execute_script(
-                    "return (document.location && document.location.hostname) ? document.location.hostname : ''"
-                ) or ""
+                self.quit()
             except Exception:
-                return ""
-
-        while time.time() < deadline:
-            cur = (self.current_url or "").lower()
-            src = (self.page_source or "").lower()
-            ttl = (self.title or "").lower()
-            host = _js_hostname().lower()
-            if (
-                "marktplaats.nl" in cur
-                or "marktplaats" in host
-                or "marktplaats" in ttl
-                or "marktplaats" in src
-            ):
-                return
-            time.sleep(0.35)
-        try:
-            self.quit()
-        except Exception:
-            pass
-        raise ProxyError(
-            self.__proxy,
-            "Страница не загрузилась (нет marktplaats в ответе/URL/title)",
-        )
+                pass
+            raise ProxyError(self.__proxy, "Страница не загрузилась (нет marktplaats в ответе)")
 
     def _track_clicks_mode(self, url: str) -> None:
         """Режим отслеживания кликов: пользователь кликает, мы логируем элемент."""

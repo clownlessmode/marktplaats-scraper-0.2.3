@@ -509,7 +509,7 @@ def main():
                 continue
             raise
         except ProxyError as exc:
-            logging.info("Прокси не работает → смена: %s", exc.msg or str(exc))
+            logging.info("Прокси не работает → смена")
             if mp_scraper:
                 try:
                     mp_scraper.close()
@@ -521,7 +521,7 @@ def main():
             if proxy:
                 msg = str(exc) + getattr(exc, "msg", "") or ""
                 if any(p in msg.lower() for p in ("proxy", "err_proxy", "err_tunnel", "err_connection", "timeout", "connect")):
-                    logging.info("Прокси не работает → смена: %s", msg[:300])
+                    logging.info("Прокси не работает → смена")
                     if mp_scraper:
                         try:
                             mp_scraper.close()
@@ -725,7 +725,7 @@ def main():
                             listings = exc.listings
                             stop = True
                         except ProxyError as exc:
-                            logging.info("Прокси не работает → смена: %s", exc.msg or str(exc))
+                            logging.info("Прокси не работает → смена")
                             raise
                         except ForbiddenError as fe:
                             if proxy:
@@ -751,14 +751,13 @@ def main():
 
                 listings_df = save_state["df"]
                 break  # успех
-            except ProxyError as exc:
-                logging.info("Прокси не работает → смена: %s", exc.msg or str(exc))
+            except ProxyError:
                 continue
             except (WebDriverException, TimeoutException) as exc:
                 if proxy and mp_scraper is None:
                     msg = str(exc) + getattr(exc, "msg", "") or ""
                     if any(p in msg for p in ("proxy", "ERR_PROXY", "ERR_TUNNEL", "ERR_CONNECTION", "connect")):
-                        logging.info("Прокси не работает → смена: %s", msg[:300])
+                        logging.info("Прокси не работает → смена")
                         if mp_scraper:
                             try:
                                 mp_scraper.close()

@@ -115,9 +115,6 @@ class MpScraper:
             "skip_cookies": skip_cookies,
             "proxy": proxy,
             "block_css": block_css,
-            # Первая загрузка через Chrome+прокси часто в разы медленнее, чем requests (proxy_checker).
-            # Дефолт --timeout=5 даёт общий лимит ожиданий на странице; для load timeout нужен высокий пол.
-            "page_load_timeout_seconds": max(120.0, float(timeout_seconds)) if proxy else None,
         }
         self.__driver: MPDriver = MPDriver(**self.__driver_params)
 
