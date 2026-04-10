@@ -150,6 +150,8 @@ class MPDriver:
         block_css: bool = False,
     ) -> None:
         chrome_options = ChromeOptions()
+        if chromium_path:
+            chrome_options.binary_location = chromium_path
         chrome_options.add_argument("--ignore-certificate-errors")
         chrome_options.add_argument("--window-size=1920,1080")
         chrome_options.add_argument("--disable-gpu")
