@@ -296,26 +296,36 @@ func TestMessageTemplateDialog(t *testing.T) {
 	defer done()
 	b.dlgStep = "tpl_name"
 	b.handleUpdate(msgText(testAdminChat, "My Template"))
+	if b.dlgStep != "tpl_subject" {
+		t.Fatalf("dlgStep=%q", b.dlgStep)
+	}
+	b.handleUpdate(msgText(testAdminChat, "Subj {title}"))
 	if b.dlgStep != "tpl_body" {
 		t.Fatalf("dlgStep=%q", b.dlgStep)
 	}
 	b.handleUpdate(msgText(testAdminChat, "Hello {title} — {price}"))
 	var cnt int
+	var subj string
 	_ = db.QueryRow(`SELECT COUNT(*) FROM email_templates WHERE user_id = ? AND name = 'My Template'`, testAdminChat).Scan(&cnt)
 	if cnt != 1 {
 		t.Fatalf("templates count %d", cnt)
+	}
+	_ = db.QueryRow(`SELECT subject_template FROM email_templates WHERE user_id = ? AND name = 'My Template'`, testAdminChat).Scan(&subj)
+	if subj != "Subj {title}" {
+		t.Fatalf("subject=%q", subj)
 	}
 }
 
 func TestMessageTemplateEdit(t *testing.T) {
 	b, db, done := newTestBot(t, false)
 	defer done()
-	id, err := listingsdb.AddEmailTemplate(db, testAdminChat, "E1", "old")
+	id, err := listingsdb.AddEmailTemplate(db, testAdminChat, "E1", "S {title}", "old")
 	if err != nil {
 		t.Fatal(err)
 	}
 	b.dlgStep = "tpl_body"
 	b.dlgTplName = "E1"
+	b.dlgTplSubject = "S {title}"
 	b.dlgEditID = id
 	b.handleUpdate(msgText(testAdminChat, "new body"))
 	var body string
@@ -325,20 +335,13 @@ func TestMessageTemplateEdit(t *testing.T) {
 	}
 }
 
-func TestCallbackTemplatesActivateDelete(t *testing.T) {
+func TestCallbackTemplatesDelete(t *testing.T) {
 	b, db, done := newTestBot(t, false)
 	defer done()
-	id, err := listingsdb.AddEmailTemplate(db, testAdminChat, "A", "b")
+	id, err := listingsdb.AddEmailTemplate(db, testAdminChat, "A", "", "b")
 	if err != nil {
 		t.Fatal(err)
 	}
-	b.handleUpdate(cbQ(testAdminChat, 6, fmt.Sprintf("tpl_activate_%d", id)))
-	cur, ok := listingsdb.ActiveTemplateID(db, testAdminChat)
-	if !ok || cur != id {
-		t.Fatalf("active %v %v", cur, ok)
-	}
-	b.handleUpdate(cbQ(testAdminChat, 6, "tpl_activate_999999"))
-
 	b.handleUpdate(cbQ(testAdminChat, 6, fmt.Sprintf("tpl_del_%d", id)))
 	var c int
 	_ = db.QueryRow(`SELECT COUNT(*) FROM email_templates WHERE id = ?`, id).Scan(&c)
@@ -347,16 +350,16 @@ func TestCallbackTemplatesActivateDelete(t *testing.T) {
 	}
 }
 
-func TestCallbackTplEditOpensDialog(t *testing.T) {
+func TestCallbackTplEdbodyOpensBodyDialog(t *testing.T) {
 	b, db, done := newTestBot(t, false)
 	defer done()
-	id, err := listingsdb.AddEmailTemplate(db, testAdminChat, "N", "body text")
+	id, err := listingsdb.AddEmailTemplate(db, testAdminChat, "N", "sub here", "body text")
 	if err != nil {
 		t.Fatal(err)
 	}
-	b.handleUpdate(cbQ(testAdminChat, 7, fmt.Sprintf("tpl_edit_%d", id)))
-	if b.dlgStep != "tpl_body" || b.dlgEditID != id {
-		t.Fatalf("dlg step=%q edit=%d", b.dlgStep, b.dlgEditID)
+	b.handleUpdate(cbQ(testAdminChat, 7, fmt.Sprintf("tpl_edbody_%d", id)))
+	if b.dlgStep != "tpl_body" || b.dlgEditID != id || b.dlgTplSubject != "sub here" {
+		t.Fatalf("dlg step=%q edit=%d subj=%q", b.dlgStep, b.dlgEditID, b.dlgTplSubject)
 	}
 }
 

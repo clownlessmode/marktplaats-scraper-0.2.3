@@ -36,7 +36,7 @@ func TestTemplatesListHTMLWithRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	_, err = listingsdb.AddEmailTemplate(db, 99, "T1", "body {title} here")
+	_, err = listingsdb.AddEmailTemplate(db, 99, "T1", "", "body {title} here")
 	if err != nil {
 		t.Fatal(err)
 	}

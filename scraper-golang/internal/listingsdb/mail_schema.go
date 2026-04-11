@@ -34,6 +34,9 @@ func initMailSchema(db *sql.DB) error {
 	if _, err := db.Exec(`ALTER TABLE email_templates ADD COLUMN user_id INTEGER`); err != nil && !isDupColumn(err) {
 		return err
 	}
+	if _, err := db.Exec(`ALTER TABLE email_templates ADD COLUMN subject_template TEXT DEFAULT ''`); err != nil && !isDupColumn(err) {
+		return err
+	}
 	// --- Telegram-боты (как telegram_bot/database.init_db) ---
 	botStmts := []string{
 		`CREATE TABLE IF NOT EXISTS users (

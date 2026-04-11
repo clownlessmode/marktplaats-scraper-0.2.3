@@ -60,9 +60,23 @@ func templateVars(l marktplaats.Listing, senderEmail string) map[string]string {
 	}
 }
 
-func encodeSubject(title string) string {
-	raw := fmt.Sprintf("Вопрос по объявлению «%s»", truncateRunes(title, 50))
+func encodeSubjectLine(s string) string {
+	s = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", " "), "\n", " "))
+	raw := truncateRunes(s, 200)
 	return mime.QEncoding.Encode("utf-8", raw)
+}
+
+func buildSubject(l marktplaats.Listing, subjectTpl string, vars map[string]string) string {
+	subjectTpl = strings.TrimSpace(subjectTpl)
+	if subjectTpl == "" || subjectTpl == "-" {
+		return truncateRunes(strings.TrimSpace(l.Title), 200)
+	}
+	s := listingsdb.FormatTemplate(subjectTpl, vars)
+	s = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", " "), "\n", " "))
+	if s == "" {
+		return truncateRunes(strings.TrimSpace(l.Title), 200)
+	}
+	return truncateRunes(s, 200)
 }
 
 func encodePhrase(s string) string {
@@ -84,11 +98,11 @@ func SendSellerEmail(db *sql.DB, l marktplaats.Listing, senderEmail, senderPassw
 		}
 	}
 
-	tplID, ok := listingsdb.ActiveTemplateID(db, userID)
+	tplID, ok := listingsdb.NextTemplateForListing(db, userID)
 	if !ok {
-		return SendResult{SkipReason: "нет активного шаблона (в боте выберите шаблон для воркера)"}
+		return SendResult{SkipReason: "нет шаблонов писем (добавьте хотя бы один в боте)"}
 	}
-	_, bodyTpl, err := listingsdb.Template(db, tplID, userID)
+	_, subjectTpl, bodyTpl, err := listingsdb.Template(db, tplID, userID)
 	if err != nil {
 		return SendResult{SkipReason: fmt.Sprintf("шаблон: %v", err)}
 	}
@@ -98,6 +112,7 @@ func SendSellerEmail(db *sql.DB, l marktplaats.Listing, senderEmail, senderPassw
 
 	vars := templateVars(l, senderEmail)
 	body := listingsdb.FormatTemplate(bodyTpl, vars)
+	subjRaw := buildSubject(l, subjectTpl, vars)
 	userName := vars["user_name"]
 	fromLine := fmt.Sprintf("%s <%s>", encodePhrase(userName), senderEmail)
 
@@ -107,7 +122,7 @@ func SendSellerEmail(db *sql.DB, l marktplaats.Listing, senderEmail, senderPassw
 	msg.WriteString("\r\nTo: ")
 	msg.WriteString(recipient)
 	msg.WriteString("\r\nSubject: ")
-	msg.WriteString(encodeSubject(l.Title))
+	msg.WriteString(encodeSubjectLine(subjRaw))
 	msg.WriteString("\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n")
 	msg.WriteString(body)
 
@@ -133,6 +148,7 @@ func SendSellerEmail(db *sql.DB, l marktplaats.Listing, senderEmail, senderPassw
 
 	_ = listingsdb.SetLastUsedEmail(db, userID, senderEmail)
 	_ = listingsdb.SetLastEmailForListing(db, userID, senderEmail)
+	_ = listingsdb.SetLastTemplateForListing(db, userID, tplID)
 	return SendResult{OK: true, Recipient: recipient}
 }
 
@@ -157,12 +173,13 @@ func BulkSendListings(db *sql.DB, userID int64, listings []marktplaats.Listing, 
 		return st
 	}
 	nMail, _ := listingsdb.ActiveEmailsCount(db, userID)
-	if _, ok := listingsdb.ActiveTemplateID(db, userID); !ok || nMail == 0 {
+	nTpl, _ := listingsdb.EmailTemplatesCount(db, userID)
+	if nTpl == 0 || nMail == 0 {
 		st.Fail = len(listings)
 		if nMail == 0 {
 			prettylog.Warn("рассылка: нет активных почт у воркера в таблице emails", "")
 		} else {
-			prettylog.Warn("рассылка: не выбран активный шаблон (active_template_id в rotation_state)", "")
+			prettylog.Warn("рассылка: нет шаблонов писем (добавьте шаблоны в боте)", "")
 		}
 		return st
 	}

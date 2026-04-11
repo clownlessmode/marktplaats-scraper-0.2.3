@@ -21,8 +21,9 @@ type Bot struct {
 	httpClient *http.Client // тот же транспорт, что у Bot API — и для скачивания файлов getFile
 
 	dlgMu        sync.Mutex
-	dlgStep      string // "", worker_emails, worker_tpl_name, worker_tpl_body, worker_bulk_csv
+	dlgStep      string // "", worker_emails, worker_tpl_name, worker_tpl_subject, worker_tpl_editsubj, worker_tpl_body, worker_bulk_csv
 	dlgTplName   string
+	dlgTplSubject string
 	dlgTplEditID int64
 	dlgBulkDelay time.Duration
 }
@@ -56,6 +57,7 @@ func (b *Bot) clearDialog() {
 	b.dlgMu.Lock()
 	b.dlgStep = ""
 	b.dlgTplName = ""
+	b.dlgTplSubject = ""
 	b.dlgTplEditID = 0
 	b.dlgBulkDelay = 0
 	b.dlgMu.Unlock()

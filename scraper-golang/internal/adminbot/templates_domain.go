@@ -42,5 +42,17 @@ func templateExampleBody() string {
 		"Ссылка: {url}\n\nС уважением."
 }
 
+func templateExampleSubject() string {
+	return "Вопрос по «{title}» — {price}"
+}
+
 // TemplateExampleBody публичный текст примера (для clientbot / документации).
 func TemplateExampleBody() string { return templateExampleBody() }
+
+// TemplateExampleSubject пример темы письма с плейсхолдерами.
+func TemplateExampleSubject() string { return templateExampleSubject() }
+
+// TemplateExampleSubjectFilled тема с подстановкой (для подсказок в боте).
+func TemplateExampleSubjectFilled() string {
+	return listingsdb.FormatTemplate(templateExampleSubject(), exampleTemplateVars())
+}

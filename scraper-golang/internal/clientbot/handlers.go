@@ -288,34 +288,66 @@ func (b *Bot) onCallback(cb *tgbotapi.CallbackQuery) {
 		b.dlgStep = "worker_tpl_name"
 		b.dlgTplEditID = 0
 		b.dlgTplName = ""
+		b.dlgTplSubject = ""
 		b.dlgMu.Unlock()
 		b.editMsgHTML(chatID, msgID, workerTplAddHTML(),
 			tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(
 				tgbotapi.NewInlineKeyboardButtonData("❌ Отмена", "worker_templates"),
 			)))
 		b.answerCallback(cb.ID, "")
-	case strings.HasPrefix(data, "worker_tpl_activate_"):
-		if !listingsdb.IsAuthorized(b.db, fromID) {
-			b.answerCallback(cb.ID, "")
-			return
-		}
-		tid, _ := strconv.ParseInt(strings.TrimPrefix(data, "worker_tpl_activate_"), 10, 64)
-		if _, _, ok := listingsdb.GetEmailTemplate(b.db, fromID, tid); !ok {
-			b.answerCallback(cb.ID, "Шаблон не найден")
-			return
-		}
-		_ = listingsdb.SetActiveTemplateID(b.db, fromID, tid)
-		prettylog.OKf("активный шаблон · user=%d · id=%d", fromID, tid)
-		txt, kb := renderWorkerTemplates(b.db, fromID)
-		b.editMsgHTML(chatID, msgID, txt, kb)
-		b.answerCallback(cb.ID, "✅ Шаблон активирован")
 	case strings.HasPrefix(data, "worker_tpl_edit_"):
 		if !listingsdb.IsAuthorized(b.db, fromID) {
 			b.answerCallback(cb.ID, "")
 			return
 		}
 		tid, _ := strconv.ParseInt(strings.TrimPrefix(data, "worker_tpl_edit_"), 10, 64)
-		name, body, ok := listingsdb.GetEmailTemplate(b.db, fromID, tid)
+		name, _, _, ok := listingsdb.GetEmailTemplate(b.db, fromID, tid)
+		if !ok {
+			b.answerCallback(cb.ID, "Не найден")
+			return
+		}
+		b.editMsgHTML(chatID, msgID,
+			fmt.Sprintf("✏️ <b>%s</b>\n\nЧто изменить?", html.EscapeString(name)),
+			tgbotapi.NewInlineKeyboardMarkup(
+				tgbotapi.NewInlineKeyboardRow(
+					tgbotapi.NewInlineKeyboardButtonData("Тема", fmt.Sprintf("worker_tpl_edsubj_%d", tid)),
+					tgbotapi.NewInlineKeyboardButtonData("Текст", fmt.Sprintf("worker_tpl_edbody_%d", tid)),
+				),
+				tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("◀️ К списку", "worker_templates")),
+			))
+		b.answerCallback(cb.ID, "")
+		return
+	case strings.HasPrefix(data, "worker_tpl_edsubj_"):
+		if !listingsdb.IsAuthorized(b.db, fromID) {
+			b.answerCallback(cb.ID, "")
+			return
+		}
+		tid, _ := strconv.ParseInt(strings.TrimPrefix(data, "worker_tpl_edsubj_"), 10, 64)
+		name, subj, _, ok := listingsdb.GetEmailTemplate(b.db, fromID, tid)
+		if !ok {
+			b.answerCallback(cb.ID, "Не найден")
+			return
+		}
+		b.dlgMu.Lock()
+		b.dlgStep = "worker_tpl_editsubj"
+		b.dlgTplEditID = tid
+		b.dlgTplName = name
+		b.dlgMu.Unlock()
+		b.editMsgHTML(chatID, msgID,
+			fmt.Sprintf("📝 <b>Тема</b> — «%s»\n\nНовая тема ({title} и др.). Пусто или <code>-</code> — только название товара.", html.EscapeString(name)),
+			tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("Отмена", "worker_templates"),
+			)))
+		b.sendHTML(chatID, "<pre>"+html.EscapeString(subj)+"</pre>")
+		b.answerCallback(cb.ID, "")
+		return
+	case strings.HasPrefix(data, "worker_tpl_edbody_"):
+		if !listingsdb.IsAuthorized(b.db, fromID) {
+			b.answerCallback(cb.ID, "")
+			return
+		}
+		tid, _ := strconv.ParseInt(strings.TrimPrefix(data, "worker_tpl_edbody_"), 10, 64)
+		name, subj, body, ok := listingsdb.GetEmailTemplate(b.db, fromID, tid)
 		if !ok {
 			b.answerCallback(cb.ID, "Не найден")
 			return
@@ -324,14 +356,16 @@ func (b *Bot) onCallback(cb *tgbotapi.CallbackQuery) {
 		b.dlgStep = "worker_tpl_body"
 		b.dlgTplEditID = tid
 		b.dlgTplName = name
+		b.dlgTplSubject = subj
 		b.dlgMu.Unlock()
 		b.editMsgHTML(chatID, msgID,
-			fmt.Sprintf("✏️ Редактирование «%s»\n\nОтправьте новый текст шаблона:", html.EscapeString(name)),
+			fmt.Sprintf("✏️ <b>Текст</b> — «%s»\n\nНовый текст:", html.EscapeString(name)),
 			tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(
-				tgbotapi.NewInlineKeyboardButtonData("❌ Отмена", "worker_templates"),
+				tgbotapi.NewInlineKeyboardButtonData("Отмена", "worker_templates"),
 			)))
 		b.sendHTML(chatID, "<pre>"+html.EscapeString(body)+"</pre>")
 		b.answerCallback(cb.ID, "")
+		return
 	case strings.HasPrefix(data, "worker_tpl_del_"):
 		if !listingsdb.IsAuthorized(b.db, fromID) {
 			b.answerCallback(cb.ID, "")
@@ -357,8 +391,8 @@ func (b *Bot) onCallback(cb *tgbotapi.CallbackQuery) {
 			b.answerCallback(cb.ID, "❌ Сначала добавьте почты")
 			return
 		}
-		if _, ok := listingsdb.ActiveTemplateID(b.db, fromID); !ok {
-			b.answerCallback(cb.ID, "❌ Выберите активный шаблон")
+		if nTpl, _ := listingsdb.EmailTemplatesCount(b.db, fromID); nTpl == 0 {
+			b.answerCallback(cb.ID, "❌ Добавьте хотя бы один шаблон")
 			return
 		}
 		b.editMsgHTML(chatID, msgID,
@@ -549,6 +583,24 @@ func (b *Bot) onMessage(msg *tgbotapi.Message) {
 		}
 		b.dlgMu.Lock()
 		b.dlgTplName = name
+		b.dlgStep = "worker_tpl_subject"
+		b.dlgMu.Unlock()
+		var vars strings.Builder
+		for k := range adminbot.TemplateVarDescriptions {
+			if vars.Len() > 0 {
+				vars.WriteString(", ")
+			}
+			vars.WriteString("<code>{")
+			vars.WriteString(k)
+			vars.WriteString("}</code>")
+		}
+		b.sendHTML(msg.Chat.ID, "Шаг 2/3: <b>тема письма</b>.\n\nПусто или <code>-</code> — только название товара.\n\nПеременные: "+vars.String())
+	case "worker_tpl_subject":
+		if !listingsdb.IsAuthorized(b.db, uid) {
+			return
+		}
+		b.dlgMu.Lock()
+		b.dlgTplSubject = strings.TrimSpace(msg.Text)
 		b.dlgStep = "worker_tpl_body"
 		b.dlgMu.Unlock()
 		var vars strings.Builder
@@ -560,7 +612,33 @@ func (b *Bot) onMessage(msg *tgbotapi.Message) {
 			vars.WriteString(k)
 			vars.WriteString("}</code>")
 		}
-		b.sendHTML(msg.Chat.ID, "Шаг 2/2: введите <b>текст шаблона</b>.\n\nПеременные: "+vars.String())
+		b.sendHTML(msg.Chat.ID, "Шаг 3/3: <b>текст шаблона</b>.\n\nПеременные: "+vars.String())
+	case "worker_tpl_editsubj":
+		if !listingsdb.IsAuthorized(b.db, uid) {
+			return
+		}
+		newSubj := strings.TrimSpace(msg.Text)
+		b.dlgMu.Lock()
+		name := b.dlgTplName
+		eid := b.dlgTplEditID
+		b.dlgMu.Unlock()
+		if eid <= 0 {
+			b.clearDialog()
+			return
+		}
+		_, _, body, ok := listingsdb.GetEmailTemplate(b.db, uid, eid)
+		if !ok {
+			b.clearDialog()
+			return
+		}
+		_, _ = listingsdb.UpdateEmailTemplate(b.db, uid, eid, name, newSubj, body)
+		b.sendPlain(msg.Chat.ID, fmt.Sprintf("Тема «%s» обновлена", name))
+		b.clearDialog()
+		txt, kb := renderWorkerTemplates(b.db, uid)
+		m := tgbotapi.NewMessage(msg.Chat.ID, txt)
+		m.ParseMode = "HTML"
+		m.ReplyMarkup = kb
+		_, _ = b.api.Send(m)
 	case "worker_tpl_body":
 		if !listingsdb.IsAuthorized(b.db, uid) {
 			return
@@ -569,17 +647,18 @@ func (b *Bot) onMessage(msg *tgbotapi.Message) {
 		b.dlgMu.Lock()
 		name := b.dlgTplName
 		eid := b.dlgTplEditID
+		subj := b.dlgTplSubject
 		b.dlgMu.Unlock()
 		if eid > 0 {
-			if _, _, ok := listingsdb.GetEmailTemplate(b.db, uid, eid); !ok {
+			if _, _, _, ok := listingsdb.GetEmailTemplate(b.db, uid, eid); !ok {
 				b.clearDialog()
 				return
 			}
-			_, _ = listingsdb.UpdateEmailTemplate(b.db, uid, eid, name, body)
+			_, _ = listingsdb.UpdateEmailTemplate(b.db, uid, eid, name, subj, body)
 			prettylog.OKf("шаблон обновлён · user=%d · id=%d", uid, eid)
 			b.sendPlain(msg.Chat.ID, fmt.Sprintf("✅ Шаблон «%s» обновлён", name))
 		} else {
-			_, _ = listingsdb.AddEmailTemplate(b.db, uid, name, body)
+			_, _ = listingsdb.AddEmailTemplate(b.db, uid, name, subj, body)
 			prettylog.OKf("шаблон создан · user=%d · %q", uid, name)
 			b.sendPlain(msg.Chat.ID, fmt.Sprintf("✅ Шаблон «%s» добавлен", name))
 		}
@@ -660,12 +739,12 @@ func (b *Bot) handleBulkMailCSV(msg *tgbotapi.Message, delay time.Duration) {
 	chatID := msg.Chat.ID
 
 	activeBefore, _ := listingsdb.ActiveEmailsCount(b.db, uid)
-	if _, ok := listingsdb.ActiveTemplateID(b.db, uid); !ok || activeBefore == 0 {
+	if nTpl, _ := listingsdb.EmailTemplatesCount(b.db, uid); nTpl == 0 || activeBefore == 0 {
 		b.clearDialog()
 		if activeBefore == 0 {
 			b.sendHTML(chatID, "❌ <b>Нет активных почт</b>")
 		} else {
-			b.sendHTML(chatID, "❌ <b>Нет активного шаблона</b>")
+			b.sendHTML(chatID, "❌ <b>Нет шаблонов писем</b>")
 		}
 		return
 	}

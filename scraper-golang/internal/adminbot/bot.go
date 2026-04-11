@@ -22,9 +22,10 @@ type Bot struct {
 	ownerID int64
 
 	dlgMu      sync.Mutex
-	dlgStep    string // "", "emails", "tpl_name", "tpl_body"
-	dlgTplName string
-	dlgEditID  int64
+	dlgStep       string // "", "emails", "tpl_name", "tpl_subject", "tpl_body", "tpl_editsubj"
+	dlgTplName    string
+	dlgTplSubject string
+	dlgEditID     int64
 }
 
 // NewBot открывает API; tgHTTP — клиент для Bot API (например с прокси); nil = прямое подключение, таймаут 120s.
@@ -61,6 +62,7 @@ func (b *Bot) clearDialog() {
 	b.dlgMu.Lock()
 	b.dlgStep = ""
 	b.dlgTplName = ""
+	b.dlgTplSubject = ""
 	b.dlgEditID = 0
 	b.dlgMu.Unlock()
 }

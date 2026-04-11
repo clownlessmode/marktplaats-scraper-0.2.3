@@ -216,19 +216,15 @@ func templatesListHTML(db *sql.DB, ownerID int64) string {
 	if err != nil || len(tpls) == 0 {
 		return "📝 <b>Шаблоны сообщений</b>\n\nНет шаблонов."
 	}
-	activeID, hasActive := listingsdb.ActiveTemplateID(db, ownerID)
 	var lines []string
 	lines = append(lines, "📝 <b>Шаблоны</b>")
+	lines = append(lines, "<i>При рассылке используются по кругу: 1‑е письмо — 1‑й шаблон, 2‑е — 2‑й…</i>")
 	for _, t := range tpls {
 		prev := t.Body
 		if len([]rune(prev)) > 50 {
 			prev = string([]rune(prev)[:50]) + "…"
 		}
-		badge := ""
-		if hasActive && t.ID == activeID {
-			badge = " ✅ активен"
-		}
-		lines = append(lines, fmt.Sprintf("• <b>%s</b>%s\n  <i>%s</i>", html.EscapeString(t.Name), badge, html.EscapeString(prev)))
+		lines = append(lines, fmt.Sprintf("• <b>%s</b>\n  <i>%s</i>", html.EscapeString(t.Name), html.EscapeString(prev)))
 	}
 	out := strings.Join(lines, "\n")
 	if len(out) > 4000 {
@@ -239,16 +235,10 @@ func templatesListHTML(db *sql.DB, ownerID int64) string {
 
 func templatesListKB(db *sql.DB, ownerID int64) tgbotapi.InlineKeyboardMarkup {
 	tpls, _ := listingsdb.ListEmailTemplates(db, ownerID)
-	activeID, hasActive := listingsdb.ActiveTemplateID(db, ownerID)
 	var rows [][]tgbotapi.InlineKeyboardButton
 	for _, t := range tpls {
-		label := "▶️ Выбрать"
-		if hasActive && t.ID == activeID {
-			label = "✓ Активен"
-		}
 		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData(label, fmt.Sprintf("tpl_activate_%d", t.ID)),
-			tgbotapi.NewInlineKeyboardButtonData("✏️", fmt.Sprintf("tpl_edit_%d", t.ID)),
+			tgbotapi.NewInlineKeyboardButtonData("✏️ Правка", fmt.Sprintf("tpl_edit_%d", t.ID)),
 			tgbotapi.NewInlineKeyboardButtonData("🗑", fmt.Sprintf("tpl_del_%d", t.ID)),
 		))
 	}
@@ -278,7 +268,11 @@ func tplAddStep1HTML() string {
 	}
 	ex := templateExampleBody()
 	filled := FormatTemplateExampleBody(ex)
-	return "📝 <b>Новый шаблон</b>\n\nШаг 1/2: введите <b>название</b> шаблона.\n\n" +
-		help.String() + "\n<b>Пример шаблона:</b>\n<pre>" + html.EscapeString(ex) + "</pre>\n\n" +
-		"<b>Пример с подстановкой:</b>\n<pre>" + html.EscapeString(filled) + "</pre>"
+	exSubj := templateExampleSubject()
+	filledSubj := listingsdb.FormatTemplate(exSubj, exampleTemplateVars())
+	return "📝 <b>Новый шаблон</b>\n\nШаг 1/3: введите <b>название</b> шаблона.\n\n" +
+		help.String() + "\n<b>Пример темы:</b>\n<pre>" + html.EscapeString(exSubj) + "</pre>\n" +
+		"<b>Тема с подстановкой:</b>\n<pre>" + html.EscapeString(filledSubj) + "</pre>\n\n" +
+		"<b>Пример текста:</b>\n<pre>" + html.EscapeString(ex) + "</pre>\n\n" +
+		"<b>Текст с подстановкой:</b>\n<pre>" + html.EscapeString(filled) + "</pre>"
 }

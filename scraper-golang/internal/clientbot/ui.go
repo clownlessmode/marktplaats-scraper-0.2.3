@@ -67,9 +67,13 @@ func workerTplAddHTML() string {
 	}
 	ex := adminbot.TemplateExampleBody()
 	filled := adminbot.FormatTemplateExampleBody(ex)
-	return "📝 <b>Новый шаблон</b>\n\nШаг 1/2: введите <b>название</b>.\n\n" +
-		help.String() + "\n<b>Пример:</b>\n<pre>" + html.EscapeString(ex) + "</pre>\n\n" +
-		"<b>С подстановкой:</b>\n<pre>" + html.EscapeString(filled) + "</pre>"
+	exSubj := adminbot.TemplateExampleSubject()
+	filledSubj := adminbot.TemplateExampleSubjectFilled()
+	return "📝 <b>Новый шаблон</b>\n\nШаг 1/3: введите <b>название</b>.\n\n" +
+		help.String() + "\n<b>Пример темы:</b>\n<pre>" + html.EscapeString(exSubj) + "</pre>\n" +
+		"<b>Тема с подстановкой:</b>\n<pre>" + html.EscapeString(filledSubj) + "</pre>\n\n" +
+		"<b>Пример текста:</b>\n<pre>" + html.EscapeString(ex) + "</pre>\n\n" +
+		"<b>Текст с подстановкой:</b>\n<pre>" + html.EscapeString(filled) + "</pre>"
 }
 
 func renderWorkerTemplates(db *sql.DB, userID int64) (string, tgbotapi.InlineKeyboardMarkup) {
@@ -81,27 +85,18 @@ func renderWorkerTemplates(db *sql.DB, userID int64) (string, tgbotapi.InlineKey
 		)
 		return "📝 <b>Шаблоны сообщений</b>\n\nНет шаблонов.", kb
 	}
-	activeID, hasActive := listingsdb.ActiveTemplateID(db, userID)
 	var lines []string
 	lines = append(lines, "📝 <b>Шаблоны</b>")
+	lines = append(lines, "<i>При рассылке по кругу: 1‑е письмо — 1‑й шаблон, 2‑е — 2‑й…</i>")
 	var rows [][]tgbotapi.InlineKeyboardButton
 	for _, t := range tpls {
 		prev := t.Body
 		if utf8.RuneCountInString(prev) > 50 {
 			prev = string([]rune(prev)[:50]) + "…"
 		}
-		badge := ""
-		if hasActive && t.ID == activeID {
-			badge = " ✅ активен"
-		}
-		lines = append(lines, fmt.Sprintf("• <b>%s</b>%s\n  <i>%s</i>", html.EscapeString(t.Name), badge, html.EscapeString(prev)))
-		label := "▶️ Выбрать"
-		if hasActive && t.ID == activeID {
-			label = "✓ Активен"
-		}
+		lines = append(lines, fmt.Sprintf("• <b>%s</b>\n  <i>%s</i>", html.EscapeString(t.Name), html.EscapeString(prev)))
 		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData(label, fmt.Sprintf("worker_tpl_activate_%d", t.ID)),
-			tgbotapi.NewInlineKeyboardButtonData("✏️", fmt.Sprintf("worker_tpl_edit_%d", t.ID)),
+			tgbotapi.NewInlineKeyboardButtonData("✏️ Правка", fmt.Sprintf("worker_tpl_edit_%d", t.ID)),
 			tgbotapi.NewInlineKeyboardButtonData("🗑", fmt.Sprintf("worker_tpl_del_%d", t.ID)),
 		))
 	}
@@ -171,18 +166,28 @@ var bulkDelayOptions = []struct {
 	Label string
 }{
 	{0, "Без задержки"},
+	{1, "1 с"},
+	{5, "5 с"},
+	{10, "10 с"},
+	{30, "30 с"},
 	{60, "1 мин"},
+	{120, "2 мин"},
 	{180, "3 мин"},
 	{300, "5 мин"},
 	{600, "10 мин"},
+	{900, "15 мин"},
+	{1800, "30 мин"},
 }
 
 func workerBulkDelayKB() tgbotapi.InlineKeyboardMarkup {
 	var rows [][]tgbotapi.InlineKeyboardButton
-	for _, o := range bulkDelayOptions {
-		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData(o.Label, fmt.Sprintf("worker_bulk_delay_%d", o.Sec)),
-		))
+	for i := 0; i < len(bulkDelayOptions); i += 2 {
+		var row []tgbotapi.InlineKeyboardButton
+		for j := i; j < i+2 && j < len(bulkDelayOptions); j++ {
+			o := bulkDelayOptions[j]
+			row = append(row, tgbotapi.NewInlineKeyboardButtonData(o.Label, fmt.Sprintf("worker_bulk_delay_%d", o.Sec)))
+		}
+		rows = append(rows, row)
 	}
 	rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("❌ Отмена", "worker_main")))
 	return tgbotapi.InlineKeyboardMarkup{InlineKeyboard: rows}

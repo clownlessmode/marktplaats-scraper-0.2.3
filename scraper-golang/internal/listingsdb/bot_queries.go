@@ -341,15 +341,16 @@ func AllEmailsForTest(db *sql.DB, ownerUserID int64) ([]struct{ Email, Password 
 // --- Шаблоны ---
 
 type TemplateRow struct {
-	ID        int64
-	Name      string
-	Body      string
-	CreatedAt string
+	ID              int64
+	Name            string
+	SubjectTemplate string
+	Body            string
+	CreatedAt       string
 }
 
 func ListEmailTemplates(db *sql.DB, ownerUserID int64) ([]TemplateRow, error) {
 	rows, err := db.Query(`
-		SELECT id, name, body, COALESCE(created_at,'') FROM email_templates WHERE user_id = ? ORDER BY id`, ownerUserID)
+		SELECT id, name, COALESCE(subject_template,''), body, COALESCE(created_at,'') FROM email_templates WHERE user_id = ? ORDER BY id`, ownerUserID)
 	if err != nil {
 		return nil, err
 	}
@@ -357,7 +358,7 @@ func ListEmailTemplates(db *sql.DB, ownerUserID int64) ([]TemplateRow, error) {
 	var out []TemplateRow
 	for rows.Next() {
 		var t TemplateRow
-		if err := rows.Scan(&t.ID, &t.Name, &t.Body, &t.CreatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.Name, &t.SubjectTemplate, &t.Body, &t.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -365,11 +366,11 @@ func ListEmailTemplates(db *sql.DB, ownerUserID int64) ([]TemplateRow, error) {
 	return out, rows.Err()
 }
 
-// AddEmailTemplate вставка; возвращает id.
-func AddEmailTemplate(db *sql.DB, ownerUserID int64, name, body string) (int64, error) {
+// AddEmailTemplate вставка; возвращает id. subjectTemplate — тема письма с {title} и др.; «-» или пусто = только название товара.
+func AddEmailTemplate(db *sql.DB, ownerUserID int64, name, subjectTemplate, body string) (int64, error) {
 	res, err := db.Exec(
-		`INSERT INTO email_templates (name, body, created_at, user_id) VALUES (?, ?, ?, ?)`,
-		strings.TrimSpace(name), strings.TrimSpace(body), nowISO(), ownerUserID)
+		`INSERT INTO email_templates (name, subject_template, body, created_at, user_id) VALUES (?, ?, ?, ?, ?)`,
+		strings.TrimSpace(name), strings.TrimSpace(subjectTemplate), strings.TrimSpace(body), nowISO(), ownerUserID)
 	if err != nil {
 		return 0, err
 	}
@@ -377,21 +378,21 @@ func AddEmailTemplate(db *sql.DB, ownerUserID int64, name, body string) (int64, 
 	return id, err
 }
 
-// GetEmailTemplate (name, body), ok.
-func GetEmailTemplate(db *sql.DB, ownerUserID, templateID int64) (name, body string, ok bool) {
+// GetEmailTemplate (name, subjectTemplate, body), ok.
+func GetEmailTemplate(db *sql.DB, ownerUserID, templateID int64) (name, subject, body string, ok bool) {
 	err := db.QueryRow(
-		`SELECT name, body FROM email_templates WHERE id = ? AND user_id = ?`, templateID, ownerUserID).Scan(&name, &body)
+		`SELECT name, COALESCE(subject_template,''), body FROM email_templates WHERE id = ? AND user_id = ?`, templateID, ownerUserID).Scan(&name, &subject, &body)
 	if err != nil {
-		return "", "", false
+		return "", "", "", false
 	}
-	return name, body, true
+	return name, subject, body, true
 }
 
-// UpdateEmailTemplate обновить имя и тело.
-func UpdateEmailTemplate(db *sql.DB, ownerUserID, templateID int64, name, body string) (bool, error) {
+// UpdateEmailTemplate обновить имя, тему и тело.
+func UpdateEmailTemplate(db *sql.DB, ownerUserID, templateID int64, name, subjectTemplate, body string) (bool, error) {
 	res, err := db.Exec(
-		`UPDATE email_templates SET name = ?, body = ? WHERE id = ? AND user_id = ?`,
-		strings.TrimSpace(name), strings.TrimSpace(body), templateID, ownerUserID)
+		`UPDATE email_templates SET name = ?, subject_template = ?, body = ? WHERE id = ? AND user_id = ?`,
+		strings.TrimSpace(name), strings.TrimSpace(subjectTemplate), strings.TrimSpace(body), templateID, ownerUserID)
 	if err != nil {
 		return false, err
 	}

@@ -64,7 +64,7 @@ func SetLastEmailForListing(db *sql.DB, userID int64, email string) error {
 	return err
 }
 
-// ActiveTemplateID ID активного шаблона воркера из rotation_state.
+// ActiveTemplateID ID активного шаблона воркера из rotation_state (устарело: рассылка крутит шаблоны по кругу).
 func ActiveTemplateID(db *sql.DB, userID int64) (int64, bool) {
 	key := fmt.Sprintf("active_template_id_%d", userID)
 	var v sql.NullString
@@ -78,16 +78,70 @@ func ActiveTemplateID(db *sql.DB, userID int64) (int64, bool) {
 	return id, true
 }
 
-// Template возвращает (name, body) шаблона воркера; пустое body если строки нет.
-func Template(db *sql.DB, templateID, userID int64) (name, body string, err error) {
-	err = db.QueryRow(
-		`SELECT name, body FROM email_templates WHERE id = ? AND user_id = ?`,
-		templateID, userID,
-	).Scan(&name, &body)
-	if err == sql.ErrNoRows {
-		return "", "", nil
+// OrderedTemplateIDs id шаблонов воркера по возрастанию (порядок round-robin).
+func OrderedTemplateIDs(db *sql.DB, userID int64) ([]int64, error) {
+	rows, err := db.Query(`SELECT id FROM email_templates WHERE user_id = ? ORDER BY id`, userID)
+	if err != nil {
+		return nil, err
 	}
-	return name, body, err
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// NextTemplateForListing — следующий шаблон по кругу для рассылки (как NextEmailForListing).
+func NextTemplateForListing(db *sql.DB, userID int64) (templateID int64, ok bool) {
+	ids, err := OrderedTemplateIDs(db, userID)
+	if err != nil || len(ids) == 0 {
+		return 0, false
+	}
+	key := fmt.Sprintf("last_template_for_listing_%d", userID)
+	var lastStr sql.NullString
+	_ = db.QueryRow(`SELECT value FROM rotation_state WHERE key = ?`, key).Scan(&lastStr)
+	lastID, _ := strconv.ParseInt(strings.TrimSpace(lastStr.String), 10, 64)
+	nextIdx := 0
+	if lastID > 0 {
+		for i, id := range ids {
+			if id == lastID {
+				nextIdx = (i + 1) % len(ids)
+				break
+			}
+		}
+	}
+	return ids[nextIdx], true
+}
+
+// SetLastTemplateForListing записывает последний использованный шаблон для round-robin.
+func SetLastTemplateForListing(db *sql.DB, userID, templateID int64) error {
+	key := fmt.Sprintf("last_template_for_listing_%d", userID)
+	_, err := db.Exec(`INSERT OR REPLACE INTO rotation_state (key, value) VALUES (?, ?)`, key, strconv.FormatInt(templateID, 10))
+	return err
+}
+
+// Template возвращает (name, subject_template, body) шаблона воркера.
+func Template(db *sql.DB, templateID, userID int64) (name, subject, body string, err error) {
+	err = db.QueryRow(
+		`SELECT name, COALESCE(subject_template,''), body FROM email_templates WHERE id = ? AND user_id = ?`,
+		templateID, userID,
+	).Scan(&name, &subject, &body)
+	if err == sql.ErrNoRows {
+		return "", "", "", nil
+	}
+	return name, subject, body, err
+}
+
+// EmailTemplatesCount число шаблонов воркера.
+func EmailTemplatesCount(db *sql.DB, userID int64) (int, error) {
+	var n int
+	err := db.QueryRow(`SELECT COUNT(*) FROM email_templates WHERE user_id = ?`, userID).Scan(&n)
+	return n, err
 }
 
 // SetLastUsedEmail rotation_state last_used_email_{userID}.
