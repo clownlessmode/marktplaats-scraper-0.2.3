@@ -21,7 +21,7 @@ func RunCLI() {
 	adminChat := flag.String("admin-chat", "", "переопределить ADMIN_CHAT_ID (числовой id чата)")
 	proxiesFile := flag.String("proxies", "proxies.txt", "файл прокси для Bot API (пусто/нет файла — без прокси; ищется также scraper-golang/proxies.txt)")
 	skipProxyCheck := flag.Bool("skip-proxy-check", false, "взять первую строку из файла прокси без проверки")
-	probeURL := flag.String("proxy-probe", "https://example.com", "URL проверки прокси перед выбором")
+	probeURL := flag.String("proxy-probe", "https://api.telegram.org", "URL проверки прокси (тот же хост, что Bot API)")
 	proxyConc := flag.Int("proxy-concurrency", 8, "параллельных проверок прокси (как у marktplaats-playwright)")
 	flag.Parse()
 

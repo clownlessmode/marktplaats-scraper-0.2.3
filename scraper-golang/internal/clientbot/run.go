@@ -36,7 +36,7 @@ func RunCLI() {
 	adminChat := flag.String("admin-chat", "", "ADMIN_CHAT_ID для уведомлений о новых воркерах")
 	proxiesFile := flag.String("proxies", "proxies.txt", "прокси для Bot API (как у adminbot)")
 	skipProxyCheck := flag.Bool("skip-proxy-check", false, "")
-	probeURL := flag.String("proxy-probe", "https://example.com", "для Telegram лучше https://api.telegram.org — проверка того же хоста, что getUpdates")
+	probeURL := flag.String("proxy-probe", "https://api.telegram.org", "проверка того же хоста, что getUpdates (раньше по умолчанию был example.com)")
 	proxyConc := flag.Int("proxy-concurrency", 8, "")
 	flag.Parse()
 
