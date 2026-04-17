@@ -11,7 +11,7 @@ import (
 
 // Entry is a normalized proxy for Playwright and pre-flight checks.
 type Entry struct {
-	Scheme   string // socks5, socks5h, http
+	Scheme   string // socks5, socks5h, http, https (https = TLS to proxy, then CONNECT)
 	Server   string // e.g. socks5://host:9999 or http://host:8080 (no userinfo)
 	Username string
 	Password string
@@ -19,6 +19,7 @@ type Entry struct {
 
 // ParseLine parses one non-empty line from proxies.txt.
 // Supported: socks5://user:pass@host:port, http(s)://..., host:port (treated as HTTP).
+// https:// — «secure web proxy»: соединение с прокси по TLS (часто порт 443); http:// — обычный HTTP CONNECT.
 func ParseLine(line string) (Entry, error) {
 	line = strings.TrimSpace(line)
 	if line == "" {
@@ -36,10 +37,6 @@ func ParseLine(line string) (Entry, error) {
 	switch scheme {
 	case "socks5", "socks5h":
 	case "http", "https":
-		// Playwright HTTP proxy uses http:// server; CONNECT works over TLS targets.
-		if scheme == "https" {
-			scheme = "http"
-		}
 	default:
 		return Entry{}, fmt.Errorf("неподдерживаемая схема %q (нужны socks5://, http:// или host:port)", u.Scheme)
 	}
@@ -51,6 +48,8 @@ func ParseLine(line string) (Entry, error) {
 		switch scheme {
 		case "socks5", "socks5h":
 			hostport = net.JoinHostPort(hostport, "1080")
+		case "https":
+			hostport = net.JoinHostPort(hostport, "443")
 		default:
 			hostport = net.JoinHostPort(hostport, "80")
 		}
